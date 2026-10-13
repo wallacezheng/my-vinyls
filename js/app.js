@@ -161,7 +161,7 @@
     const url = safeUrl(rec.coverUrl);
     return `<div class="cover ${extra || ''}" style="--c:${c.bg};--ci:${c.ink}">
       <span class="cover-fallback">${esc(rec.title || '未命名')}</span>
-      ${url ? `<img src="${esc(url)}" alt="${esc(alt || '')}" loading="lazy" decoding="async" onload="this.parentNode.classList.add('loaded')" onerror="this.remove()">` : ''}
+      ${url ? `<img src="${esc(url)}" alt="${esc(alt || '')}" loading="lazy" decoding="async" draggable="false" onload="this.parentNode.classList.add('loaded')" onerror="this.remove()">` : ''}
     </div>`;
   }
 
@@ -325,6 +325,7 @@
         <a class="tile outline" href="#/all?fav=1">我的最愛<small>${recs.filter((r) => r.favorite).length}</small></a>
       </div>`;
     renderCrate();
+    bindCrateGestures($('#crate'));
     recent.concat(favs).forEach(extractColor);
   }
 
@@ -348,88 +349,148 @@
     const pos = ((S.crate.i % n) + n) % n + 1;
     box.dataset.cid = cur.id;
     applyColorVars(box, cur);
-    box.innerHTML = `
-      <div class="crate-head"><strong>翻唱片箱</strong><span class="mono" style="font-size:12px">${pos} / ${n}</span></div>
-      <div class="crate-stage" id="crate-stage">
-        ${n > 2 ? `<div class="crate-card back2">${coverHTML(b2)}</div>` : ''}
-        ${n > 1 ? `<div class="crate-card back1">${coverHTML(b1)}</div>` : ''}
-        <div class="crate-card front" id="crate-front">${coverHTML(cur, '', cur.title + ' 封面')}</div>
-      </div>
-      <div class="crate-info">
-        <span class="t">${esc(cur.title)}</span>
-        <span class="a">${esc(cur.artist)}</span>
-        <span class="m">${esc(crateMeta(cur))}</span>
-      </div>
-      <div class="crate-ctrl">
-        <button class="icon-btn" data-action="crate-prev" aria-label="上一張">${I.back}</button>
-        <a class="btn btn-pull" href="#/r/${encodeURIComponent(cur.id)}">抽出來看看</a>
-        <button class="icon-btn" data-action="crate-next" aria-label="下一張">${I.next}</button>
-      </div>
-      <p class="crate-hint">左右滑動翻片・點封面抽出來</p>`;
+    // 骨架只建一次；之後翻片只換內容，不替換正在被手指按住的元素（否則連續滑動會失效）
+    if (!$('#crate-stage', box)) {
+      box.innerHTML = `
+        <div class="crate-head"><strong>翻唱片箱</strong><span class="mono" style="font-size:12px" id="crate-pos"></span></div>
+        <div class="crate-stage" id="crate-stage">
+          <div class="crate-card back2"></div>
+          <div class="crate-card back1"></div>
+          <div class="crate-card front" id="crate-front"></div>
+        </div>
+        <div class="crate-info">
+          <span class="t" id="crate-t"></span>
+          <span class="a" id="crate-a"></span>
+          <span class="m" id="crate-m"></span>
+        </div>
+        <div class="crate-ctrl">
+          <button class="icon-btn" data-action="crate-prev" aria-label="上一張">${I.back}</button>
+          <a class="btn btn-pull" id="crate-pull" href="#/">抽出來看看</a>
+          <button class="icon-btn" data-action="crate-next" aria-label="下一張">${I.next}</button>
+        </div>
+        <p class="crate-hint">左右滑動翻片・點封面抽出來</p>`;
+    }
+    $('#crate-pos', box).textContent = `${pos} / ${n}`;
+    const cards = [[$('.back2', box), n > 2 ? b2 : null], [$('.back1', box), n > 1 ? b1 : null], [$('#crate-front', box), cur]];
+    cards.forEach(([el, rec]) => {
+      el.classList.remove('anim');
+      el.style.transform = ''; el.style.opacity = '';
+      el.hidden = !rec;
+      if (rec && el.dataset.rid !== rec.id) {
+        el.dataset.rid = rec.id;
+        el.innerHTML = coverHTML(rec, '', rec === cur ? rec.title + ' 封面' : '');
+      }
+    });
+    $('#crate-t', box).textContent = cur.title;
+    $('#crate-a', box).textContent = cur.artist;
+    $('#crate-m', box).textContent = crateMeta(cur);
+    $('#crate-pull', box).setAttribute('href', '#/r/' + encodeURIComponent(cur.id));
     [cur, b1, b2].forEach(extractColor);
-    bindCrateSwipe($('#crate-stage'));
   }
 
+  let crateTimer = null;
   function crateStep(dir) {
+    if (crateTimer) { clearTimeout(crateTimer); crateTimer = null; }
     S.crate.i += dir;
     renderCrate();
   }
 
-  function bindCrateSwipe(stage) {
-    if (!stage) return;
-    const front = $('#crate-front', stage);
-    const b1 = $('.back1', stage), b2 = $('.back2', stage);
-    let sx = 0, sy = 0, t0 = 0, dx = 0, mode = null, pid = null;
+  /**
+   * 翻唱片箱的手勢。只在首頁渲染時綁一次在 #crate 上（不隨每次翻片重綁），
+   * 手機用 touch 事件（可以在水平滑動時阻止頁面捲動），電腦用滑鼠的 pointer 事件。
+   * 動畫還沒結束就開始下一次滑動時，會立刻完成上一張，所以可以連續快速翻。
+   */
+  function bindCrateGestures(box) {
+    let g = null; // 進行中的手勢
 
-    function setBacks(p) {
-      if (b1) b1.style.transform = `translate(${-5.1 * p}%, ${9.2 * p}%) scale(${1 + 0.113 * p})`;
-      if (b2) b2.style.transform = `translate(${-5.1 * p}%, ${9.7 * p}%) scale(${1 + 0.128 * p})`;
+    function parts() {
+      const stage = $('#crate-stage', box);
+      return stage ? { stage: stage, front: $('#crate-front', stage), b1: $('.back1', stage), b2: $('.back2', stage) } : null;
     }
-    function reset(animate) {
-      [front, b1, b2].forEach((el) => { if (el) { el.classList.toggle('anim', !!animate); } });
-      front.style.transform = ''; setBacks(0);
+    function setBacks(p, P) {
+      if (P.b1) P.b1.style.transform = `translate(${-5.1 * p}%, ${9.2 * p}%) scale(${1 + 0.113 * p})`;
+      if (P.b2) P.b2.style.transform = `translate(${-5.1 * p}%, ${9.7 * p}%) scale(${1 + 0.128 * p})`;
     }
-
-    stage.addEventListener('pointerdown', (e) => {
-      if (e.button !== undefined && e.button !== 0) return;
-      sx = e.clientX; sy = e.clientY; t0 = performance.now(); dx = 0; mode = null; pid = e.pointerId;
-      [front, b1, b2].forEach((el) => el && el.classList.remove('anim'));
-    });
-    stage.addEventListener('pointermove', (e) => {
-      if (e.pointerId !== pid) return;
-      const mx = e.clientX - sx, my = e.clientY - sy;
-      if (!mode) {
-        if (Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my)) { mode = 'h'; try { stage.setPointerCapture(pid); } catch (er) { /* 忽略 */ } }
-        else if (Math.abs(my) > 10) { mode = 'v'; }
+    function start(x, y, target) {
+      if (!target.closest('#crate-stage')) return false;
+      if (crateTimer) { clearTimeout(crateTimer); crateTimer = null; crateStep(g && g.dir || 0); }
+      const P = parts();
+      if (!P) return false;
+      [P.front, P.b1, P.b2].forEach((el) => el && el.classList.remove('anim'));
+      g = { sx: x, sy: y, t0: performance.now(), dx: 0, mode: null, P: P, dir: 0 };
+      return true;
+    }
+    function move(x, y) {
+      if (!g) return false;
+      const mx = x - g.sx, my = y - g.sy;
+      if (!g.mode) {
+        if (Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my)) g.mode = 'h';
+        else if (Math.abs(my) > 10) g.mode = 'v';
       }
-      if (mode !== 'h') return;
-      dx = mx;
-      front.style.transform = `translateX(${dx}px) rotate(${dx / 18}deg)`;
-      setBacks(Math.min(Math.abs(dx) / 160, 1));
-    });
-    function end(e) {
-      if (e.pointerId !== pid) return;
-      pid = null;
-      const dt = performance.now() - t0;
-      if (!mode && dt < 350 && Math.abs(e.clientX - sx) < 6 && Math.abs(e.clientY - sy) < 6) {
+      if (g.mode !== 'h') return false;
+      g.dx = mx;
+      g.P.front.style.transform = `translateX(${mx}px) rotate(${mx / 18}deg)`;
+      setBacks(Math.min(Math.abs(mx) / 160, 1), g.P);
+      return true;
+    }
+    function finish(x, y, cancelled) {
+      if (!g) return;
+      const G = g; g = null;
+      const dt = performance.now() - G.t0;
+      if (!cancelled && !G.mode && dt < 350 && Math.abs(x - G.sx) < 6 && Math.abs(y - G.sy) < 6) {
         const cur = crateAt(0);
         if (cur) location.hash = '#/r/' + encodeURIComponent(cur.id);
         return;
       }
-      if (mode !== 'h') return;
-      const v = Math.abs(dx) / Math.max(dt, 1);
-      if (Math.abs(dx) > 80 || (v > 0.6 && Math.abs(dx) > 40)) {
-        const dir = dx < 0 ? 1 : -1;
-        front.classList.add('anim');
-        front.style.transform = `translateX(${dx < 0 ? -420 : 420}px) rotate(${dx < 0 ? -18 : 18}deg)`;
-        front.style.opacity = '0';
-        setTimeout(() => crateStep(dir), 200);
+      if (G.mode !== 'h') return;
+      const v = Math.abs(G.dx) / Math.max(dt, 1);
+      if (!cancelled && (Math.abs(G.dx) > 70 || (v > 0.5 && Math.abs(G.dx) > 30))) {
+        const dir = G.dx < 0 ? 1 : -1;
+        G.P.front.classList.add('anim');
+        G.P.front.style.transform = `translateX(${G.dx < 0 ? -420 : 420}px) rotate(${G.dx < 0 ? -18 : 18}deg)`;
+        G.P.front.style.opacity = '0';
+        g = { dir: dir }; // 讓下一次手勢知道要先完成哪個方向
+        crateTimer = setTimeout(() => { crateTimer = null; g = null; crateStep(dir); }, 180);
       } else {
-        reset(true);
+        [G.P.front, G.P.b1, G.P.b2].forEach((el) => el && el.classList.add('anim'));
+        G.P.front.style.transform = ''; setBacks(0, G.P);
       }
     }
-    stage.addEventListener('pointerup', end);
-    stage.addEventListener('pointercancel', (e) => { if (e.pointerId === pid) { pid = null; reset(true); } });
+
+    // 手機：touch 事件
+    box.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      start(t.clientX, t.clientY, e.target);
+    }, { passive: true });
+    box.addEventListener('touchmove', (e) => {
+      if (!g || !g.P) return;
+      const t = e.touches[0];
+      if (move(t.clientX, t.clientY) && e.cancelable) e.preventDefault(); // 水平滑動時不要捲動頁面
+    }, { passive: false });
+    box.addEventListener('touchend', (e) => {
+      if (!g || !g.P) return;
+      const t = e.changedTouches[0];
+      const wasTap = !g.mode;
+      finish(t.clientX, t.clientY, false);
+      if (wasTap && e.cancelable) e.preventDefault(); // 避免再觸發一次 click
+    });
+    box.addEventListener('touchcancel', () => { if (g && g.P) finish(0, 0, true); });
+
+    // 電腦：滑鼠
+    function onMouseMove(e) { if (g && g.P) move(e.clientX, e.clientY); }
+    function onMouseUp(e) {
+      window.removeEventListener('pointermove', onMouseMove);
+      window.removeEventListener('pointerup', onMouseUp);
+      if (g && g.P) finish(e.clientX, e.clientY, false);
+    }
+    box.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      if (!start(e.clientX, e.clientY, e.target)) return;
+      e.preventDefault();
+      window.addEventListener('pointermove', onMouseMove);
+      window.addEventListener('pointerup', onMouseUp);
+    });
   }
 
   // ───────────────────────── 全部收藏 ─────────────────────────

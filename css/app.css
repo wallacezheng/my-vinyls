@@ -34,6 +34,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); }
 h1, h2, h3 { margin: 0; line-height: 1.15; }
 [hidden] { display: none !important; }
+/* 防止手機快速連點按鈕時被當成「點兩下放大」 */
+html, a, button, input, select, textarea, label, summary { touch-action: manipulation; }
+img { -webkit-user-drag: none; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .muted { color: var(--muted); }
@@ -150,10 +153,11 @@ h1, h2, h3 { margin: 0; line-height: 1.15; }
 .crate-head strong { font-weight: 900; font-size: 18px; }
 .crate-stage {
   position: relative; width: min(236px, 66vw); aspect-ratio: 236 / 284; margin: 14px auto 0;
-  touch-action: pan-y; user-select: none; -webkit-user-select: none; cursor: grab;
+  touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab;
 }
 .crate-stage:active { cursor: grabbing; }
 .crate-card { position: absolute; border-radius: 4px; overflow: hidden; will-change: transform; }
+.crate-card * { pointer-events: none; } /* 讓手指永遠按在卡片本身，翻片換內容時手勢不中斷 */
 .crate-card .cover { border-radius: 4px; }
 .crate-card.back2 { left: 10.2%; top: 0; width: 79.6%; box-shadow: 0 4px 10px rgba(0,0,0,.18); }
 .crate-card.back1 { left: 5.1%; top: 7.75%; width: 89.8%; box-shadow: 0 6px 14px rgba(0,0,0,.2); }
