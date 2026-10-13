@@ -177,10 +177,11 @@
     S.history = d.history || {};
     S.priceInfo = d.priceCursor || null;
     S.preorders = d.preorders || [];
+    S.aliases = d.aliases || {};
     if (S.crate.order.length !== S.records.length) buildCrateOrder();
   }
   function persist() {
-    API.saveCache({ records: S.records, settings: S.settings, exchangeRate: S.rate, history: S.history, priceCursor: S.priceInfo, preorders: S.preorders });
+    API.saveCache({ records: S.records, settings: S.settings, exchangeRate: S.rate, history: S.history, priceCursor: S.priceInfo, preorders: S.preorders, aliases: S.aliases });
   }
   function upsert(rec) {
     const i = S.records.findIndex((r) => r.id === rec.id);
@@ -316,6 +317,7 @@
     if (path === '/all') return { name: 'all', params: params };
     if (path === '/add') return { name: 'add', params: params };
     if (path === '/stats') return { name: 'stats' };
+    if (path === '/tidy') return { name: 'tidy', params: params };
     return { name: 'home' };
   }
 
@@ -338,7 +340,7 @@
 
   function render(keepScroll) {
     const r = route();
-    $$('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r.name === 'detail' ? '' : r.name)));
+    $$('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (r.name === 'detail' ? '' : r.name === 'tidy' ? 'stats' : r.name)));
     const view = $('#view');
     view.classList.toggle('flush', r.name === 'detail');
     if (r.name === 'home') renderHome(view);
@@ -346,6 +348,7 @@
     else if (r.name === 'detail') renderDetail(view, r.id);
     else if (r.name === 'add') renderAdd(view);
     else if (r.name === 'stats') renderStats(view);
+    else if (r.name === 'tidy') renderTidy(view, r.params);
     if (!keepScroll) window.scrollTo(0, S.scroll[location.hash || '#/'] || 0);
   }
 
@@ -1213,7 +1216,7 @@
       S.add.form = Object.assign({
         id: 'new', tags: [], rating: 0, favorite: false, review: '', status: S.settings.status[0] || '',
         language: S.settings.language[0] || '', subCategory: S.settings.sub[0] || '', appleMusicUrl: '', purchase: ''
-      }, d, { barcode: d.barcode || (isBarcode ? S.add.query.replace(/\s/g, '') : ''), coverUrl: d.coverUrl || x.cover }, preorderPrefill());
+      }, applyAliases(d), { barcode: d.barcode || (isBarcode ? S.add.query.replace(/\s/g, '') : ''), coverUrl: d.coverUrl || x.cover }, preorderPrefill());
       render();
       API.appleMusic(d.artist, d.title).then((url) => {
         if (!url || !S.add.form || S.add.form.releaseId !== d.releaseId) return;
@@ -1326,6 +1329,151 @@
   async function closeScanner() {
     $('#scanner').hidden = true;
     if (scanner) { try { await scanner.stop(); scanner.clear(); } catch (e) { /* 忽略 */ } scanner = null; }
+  }
+
+  // ───────────────────────── 整理寫法 ─────────────────────────
+  const TIDY_FIELDS = { artist: '藝人', label: '唱片公司', purchaseSource: '購入通路', location: '存放位置' };
+  let s2t = null; // 簡轉繁函式（opencc-js，只在這頁才載入）
+  function loadS2T() {
+    if (s2t) return Promise.resolve(s2t);
+    return new Promise((resolve) => {
+      const sc = document.createElement('script');
+      sc.src = 'https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/cn2t.js';
+      sc.onload = () => { try { s2t = window.OpenCC.Converter({ from: 'cn', to: 'tw' }); } catch (e) { s2t = (x) => x; } resolve(s2t); };
+      sc.onerror = () => { s2t = (x) => x; resolve(s2t); };
+      document.head.appendChild(sc);
+    });
+  }
+  function applyAliases(d) {
+    const out = Object.assign({}, d);
+    Object.keys(TIDY_FIELDS).forEach((f) => { const m = (S.aliases || {})[f] || {}; if (out[f] && m[out[f]]) out[f] = m[out[f]]; });
+    return out;
+  }
+  function tidyKey(v) {
+    let k = (s2t || ((x) => x))(String(v || '')).toLowerCase();
+    k = k.replace(/(股份)?有限公司|co\.?,?\s*ltd\.?|\bltd\.?|\binc\.?|\blimited\b|&\s*tapes|\band tapes\b|\bcorp(oration)?\.?/g, '');
+    return k.replace(/[\s\-_.,:;'"’&()（）\[\]「」『』【】・·]/g, '');
+  }
+  function tidyIgnored() { return loadJSON('vinyl.tidy.ignore') || []; }
+
+  /** 找出可能是同一個的寫法：規則相同（簡繁、大小寫、空白、公司字尾），或藝人的 Discogs ID 相同 */
+  function tidyGroups(field) {
+    const counts = {}, ids = {};
+    S.records.forEach((r) => {
+      const v = String(r[field] || '').trim();
+      if (!v) return;
+      counts[v] = (counts[v] || 0) + 1;
+      if (field === 'artist' && r.artistId) (ids[v] = ids[v] || new Set()).add(r.artistId);
+    });
+    const vals = Object.keys(counts);
+    const parent = {}; vals.forEach((v) => { parent[v] = v; });
+    const find = (v) => (parent[v] === v ? v : (parent[v] = find(parent[v])));
+    const union = (a, b) => { parent[find(a)] = find(b); };
+    const byKey = {}, byId = {};
+    vals.forEach((v) => {
+      const k = tidyKey(v);
+      if (k) { if (byKey[k]) union(v, byKey[k]); else byKey[k] = v; }
+      (ids[v] ? Array.from(ids[v]) : []).forEach((id) => { if (byId[id]) union(v, byId[id]); else byId[id] = v; });
+    });
+    const groups = {};
+    vals.forEach((v) => { (groups[find(v)] = groups[find(v)] || []).push(v); });
+    const ignored = tidyIgnored();
+    return {
+      counts: counts,
+      groups: Object.values(groups).filter((g) => g.length > 1)
+        .map((g) => g.sort((a, b) => counts[b] - counts[a] || ((s2t && s2t(b) === b) - (s2t && s2t(a) === a))))
+        .filter((g) => ignored.indexOf(field + ':' + g.slice().sort().join('|')) === -1)
+    };
+  }
+
+  function renderTidy(view, params) {
+    const field = TIDY_FIELDS[params && params.get('f')] ? params.get('f') : 'artist';
+    S.tidySel = S.tidySel && S.tidySel.field === field ? S.tidySel : { field: field, set: new Set(), q: '' };
+    if (!s2t) {
+      view.innerHTML = '<div class="loading" style="padding-top:30vh"><span class="spinner"></span>&nbsp; 準備簡繁對照…</div>';
+      loadS2T().then(() => { if (route().name === 'tidy') render(true); });
+      return;
+    }
+    const { counts, groups } = tidyGroups(field);
+    const label = TIDY_FIELDS[field];
+    const noIds = field === 'artist' && !S.records.some((r) => r.artistId);
+    view.innerHTML = `
+      <header class="page-head"><div><span class="eyebrow">統一寫法，統計和搜尋才準</span><h1>整理寫法</h1></div>
+        <a class="icon-btn soft" href="#/stats" aria-label="回到統計" style="color:var(--ink)">${I.back}</a></header>
+      <div class="seg seg4" role="tablist">${Object.keys(TIDY_FIELDS).map((f) => `<a role="tab" href="#/tidy?f=${f}" class="${f === field ? 'on' : ''}" aria-selected="${f === field}">${TIDY_FIELDS[f]}</a>`).join('')}</div>
+
+      <div class="section-head"><h2>可能是同一個</h2></div>
+      ${noIds ? '<p class="muted pad" style="margin:-4px 0 10px;font-size:13px">提示：到統計頁按一次「更新全部 Discogs 價格」，就能用 Discogs 藝人編號比對中英文名（例如 Eason Chan／陳奕迅）。</p>' : ''}
+      <div class="tidy-groups">
+        ${groups.length ? groups.map((g, gi) => `
+          <form class="tidy-card" data-group="${gi}">
+            <p class="muted" style="margin:0 0 8px;font-size:13px">選一個要保留的寫法：</p>
+            ${g.map((v, i) => `<label class="tidy-opt"><input type="radio" name="keep" value="${esc(v)}" ${i === 0 ? 'checked' : ''}><span>${esc(v)}</span><span class="mono muted">${counts[v]} 張</span></label>`).join('')}
+            <div class="form-actions" style="padding:10px 0 0">
+              <button type="button" class="btn btn-outline btn-sm" data-action="tidy-ignore" data-values="${esc(g.join('\u0001'))}">不是同一個</button>
+              <button type="button" class="btn btn-ink btn-sm" data-action="tidy-merge-group" data-values="${esc(g.join('\u0001'))}">合併</button>
+            </div>
+          </form>`).join('') : `<p class="empty" style="padding:24px">目前沒有發現疑似重複的${esc(label)}寫法。</p>`}
+      </div>
+
+      <div class="section-head"><h2>手動合併</h2></div>
+      <p class="muted pad" style="margin:-4px 0 10px;font-size:13px">規則抓不到的（例如中英文名），勾選兩個以上再按合併。</p>
+      <label class="search-bar">${I.search}<span class="sr-only">搜尋</span><input id="tidy-q" type="search" placeholder="搜尋${esc(label)}" value="${esc(S.tidySel.q)}" autocomplete="off"></label>
+      <ul class="tidy-all" id="tidy-all"></ul>
+      <div class="tidy-bar" id="tidy-bar" hidden><span id="tidy-bar-n"></span><button class="btn btn-ink btn-sm" data-action="tidy-merge-sel">合併選取的寫法</button></div>`;
+    const drawAll = () => {
+      const q = S.tidySel.q.trim().toLowerCase();
+      const vals = Object.keys(counts).filter((v) => !q || v.toLowerCase().indexOf(q) !== -1 || tidyKey(v).indexOf(tidyKey(q)) !== -1)
+        .sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+      $('#tidy-all').innerHTML = vals.map((v) => `<li><label><input type="checkbox" data-tidy-val="${esc(v)}" ${S.tidySel.set.has(v) ? 'checked' : ''}><span>${esc(v)}</span><span class="mono muted">${counts[v]}</span></label></li>`).join('') || '<li class="muted" style="padding:12px 0">沒有符合的寫法</li>';
+      const n = S.tidySel.set.size;
+      $('#tidy-bar').hidden = n < 2;
+      $('#tidy-bar-n').textContent = `已選 ${n} 個`;
+    };
+    drawAll();
+    $('#tidy-q').addEventListener('input', debounce((e) => { S.tidySel.q = e.target.value; drawAll(); }, 150));
+    $('#tidy-all').addEventListener('change', (e) => {
+      const cb = e.target.closest('[data-tidy-val]'); if (!cb) return;
+      if (cb.checked) S.tidySel.set.add(cb.dataset.tidyVal); else S.tidySel.set.delete(cb.dataset.tidyVal);
+      drawAll();
+    });
+  }
+
+  async function doRename(field, from, to) {
+    try {
+      const res = await API.rename(field, from, to);
+      S.records.forEach((r) => { if (from.indexOf(String(r[field] || '').trim()) !== -1) r[field] = to; });
+      S.aliases = res.aliases || S.aliases;
+      persist();
+      toast(`已合併為「${to}」，共更新 ${res.changed} 張`);
+      if (S.tidySel) S.tidySel.set = new Set();
+      render(true);
+    } catch (e) { handleError(e); }
+  }
+
+  function openMergeSheet(field, values) {
+    const counts = {};
+    S.records.forEach((r) => { const v = String(r[field] || '').trim(); if (v) counts[v] = (counts[v] || 0) + 1; });
+    const sorted = values.slice().sort((a, b) => (counts[b] || 0) - (counts[a] || 0));
+    openSheet(`<h2 id="sheet-title">合併成哪個寫法？</h2>
+      <form id="merge-form" style="display:flex;flex-direction:column;gap:6px">
+        ${sorted.map((v, i) => `<label class="tidy-opt"><input type="radio" name="keep" value="${esc(v)}" ${i === 0 ? 'checked' : ''}><span>${esc(v)}</span><span class="mono muted">${counts[v] || 0} 張</span></label>`).join('')}
+        <label class="tidy-opt"><input type="radio" name="keep" value="__custom"><span>其他寫法：</span></label>
+        <input class="tidy-custom" name="custom" placeholder="例如：陳奕迅 Eason Chan">
+        <p class="muted" style="font-size:13px;margin:6px 0 0">之後新增唱片時，舊寫法也會自動換成這個。</p>
+        <div class="form-actions" style="padding-top:8px"><button type="button" class="btn btn-outline" data-action="close-sheet">取消</button><button class="btn btn-ink" type="submit">合併</button></div>
+      </form>`, (root) => {
+      const form = $('#merge-form', root);
+      $('[name="custom"]', form).addEventListener('focus', () => { $('[value="__custom"]', form).checked = true; });
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        let to = $('[name="keep"]:checked', form).value;
+        if (to === '__custom') to = $('[name="custom"]', form).value.trim();
+        if (!to) { toast('請輸入要保留的寫法', true); return; }
+        closeSheet();
+        doRename(field, values, to);
+      });
+    });
   }
 
   // ───────────────────────── 統計 ─────────────────────────
@@ -1449,7 +1597,7 @@
       <div class="section-head"><h2>聆聽</h2></div>
       <div class="card">${topPlayed.length ? `<p class="mono" style="margin:0 0 6px">共聽了 ${listens} 次</p><ol class="rank">${topPlayed.map((r) => rankItem(r, r.listenCount + ' 次')).join('')}</ol>` : '<p class="muted" style="margin:0">還沒有聆聽紀錄。在唱片詳情按「今天聽了」就會開始累積。</p>'}</div>
       <div class="section-head"><h2>語系</h2></div><div class="card">${barsHTML(countBy((r) => r.language))}</div>
-      <div class="section-head"><h2>最常收藏的藝人</h2></div><div class="card">${barsHTML(countBy((r) => r.artist).slice(0, 8))}</div>
+      <div class="section-head"><h2>最常收藏的藝人</h2><a href="#/tidy">整理寫法</a></div><div class="card">${barsHTML(countBy((r) => r.artist).slice(0, 8))}</div>
       ${R.some((r) => r.purchaseSource) ? `<div class="section-head"><h2>購入通路</h2></div><div class="card">${barsHTML(countBy((r) => r.purchaseSource).slice(0, 8))}</div>` : ''}
       ${R.some((r) => r.location) ? `<div class="section-head"><h2>存放位置</h2></div><div class="card">${barsHTML(countBy((r) => r.location || '未設定'))}</div>` : ''}
       ${topValue.length ? `<div class="section-head"><h2>最低價最高的唱片</h2></div><div class="card"><ol class="rank">${topValue.map((r) => rankItem(r, fmtUSD(r.marketUSD))).join('')}</ol></div>` : ''}
@@ -1457,6 +1605,7 @@
       <div class="section-head"><h2>狀態</h2></div><div class="card">${barsHTML(countBy((r) => r.status))}</div>
 
       <div class="pad" style="padding-top:32px;display:flex;flex-direction:column;gap:10px">
+        <a class="btn btn-outline btn-block" href="#/tidy">整理藝人、唱片公司的寫法</a>
         <button class="btn btn-outline btn-block" data-action="reload">重新載入資料</button>
         <button class="btn btn-danger btn-block" data-action="logout">登出</button>
       </div>`;
@@ -1554,6 +1703,20 @@
       case 'add-back': S.add.form = null; render(); break;
       case 'update-prices': updateAllPrices(); break;
       case 'pre-new': openPreorderForm(null); break;
+      case 'tidy-merge-group': {
+        const field = (route().params && route().params.get('f')) || 'artist';
+        const vals = el.dataset.values.split('\u0001');
+        const keep = $('[name="keep"]:checked', el.closest('form')).value;
+        if (await confirmSheet('確定合併？', `${vals.filter((v) => v !== keep).map((v) => '「' + v + '」').join('、')} 會全部改成「${keep}」。`, '合併')) doRename(TIDY_FIELDS[field] ? field : 'artist', vals, keep);
+        break;
+      }
+      case 'tidy-ignore': {
+        const field = (route().params && route().params.get('f')) || 'artist';
+        const ig = tidyIgnored(); ig.push(field + ':' + el.dataset.values.split('\u0001').sort().join('|'));
+        saveJSON('vinyl.tidy.ignore', ig); toast('好，之後不再提示這組'); render(true);
+        break;
+      }
+      case 'tidy-merge-sel': openMergeSheet(S.tidySel.field, Array.from(S.tidySel.set)); break;
       case 'pre-edit': openPreorderForm((S.preorders || []).find((x) => x.id === el.dataset.id)); break;
       case 'pre-arrive': { const p = (S.preorders || []).find((x) => x.id === el.dataset.id); if (p) startArrival(p); break; }
       case 'cancel-pre': S.add.fromPre = null; render(true); break;

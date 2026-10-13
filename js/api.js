@@ -68,6 +68,7 @@
     listen: (id) => call('listen', { id: id }),
     preorderAdd: (p) => call('preorderAdd', { preorder: p }),
     preorderUpdate: (id, updates) => call('preorderUpdate', { id: id, updates: updates }),
-    preorderRemove: (id) => call('preorderRemove', { id: id })
+    preorderRemove: (id) => call('preorderRemove', { id: id }),
+    rename: (field, from, to) => call('rename', { field: field, from: from, to: to })
   };
 })();
