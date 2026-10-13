@@ -21,7 +21,7 @@
   };
 
   function freshList(over) {
-    return Object.assign({ q: '', language: [], sub: [], tags: [], status: [], rating: [], year: [], fav: false, sort: 'recent', shown: 40 }, over || {});
+    return Object.assign({ q: '', language: [], sub: [], tags: [], status: [], rating: [], year: [], location: [], fav: false, sort: 'recent', shown: 40 }, over || {});
   }
 
   // ───────────────────────── 工具 ─────────────────────────
@@ -69,6 +69,9 @@
     play: '<svg viewBox="0 0 24 24" aria-hidden="true" style="fill:currentColor;stroke:none"><path d="M8 5v14l11-7z"/></svg>',
     ext: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg>',
     star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg>',
+    disc: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'
   };
 
@@ -173,10 +176,11 @@
     S.rate = d.exchangeRate || S.rate;
     S.history = d.history || {};
     S.priceInfo = d.priceCursor || null;
+    S.preorders = d.preorders || [];
     if (S.crate.order.length !== S.records.length) buildCrateOrder();
   }
   function persist() {
-    API.saveCache({ records: S.records, settings: S.settings, exchangeRate: S.rate, history: S.history, priceCursor: S.priceInfo });
+    API.saveCache({ records: S.records, settings: S.settings, exchangeRate: S.rate, history: S.history, priceCursor: S.priceInfo, preorders: S.preorders });
   }
   function upsert(rec) {
     const i = S.records.findIndex((r) => r.id === rec.id);
@@ -190,6 +194,70 @@
     S.crate.order = S.crate.order.filter((x) => x !== id);
     persist();
   }
+  const pendingPreorders = () => (S.preorders || []).filter((p) => p.status !== '已到貨');
+  const daysSince = (d) => { const t = Date.parse(String(d || '').slice(0, 10)); return isNaN(t) ? null : Math.floor((Date.now() - t) / 86400000); };
+  const distinct = (key) => Array.from(new Set(S.records.map((r) => String(r[key] || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  /** 同一張專輯的其他版本：優先用 Discogs master，沒有的話用「藝人＋專輯名」比對 */
+  const normKey = (s) => String(s || '').toLowerCase().replace(/[\s\-_.,:;'"「」『』()（）\[\]【】]/g, '');
+  function otherVersions(r) {
+    return S.records.filter((x) => x.id !== r.id && (
+      (r.masterId && x.masterId === r.masterId) ||
+      (normKey(x.title) === normKey(r.title) && normKey(x.artist) === normKey(r.artist))));
+  }
+  function relDays(d) {
+    const n = daysSince(d);
+    if (n == null) return '';
+    return n <= 0 ? '今天' : n === 1 ? '昨天' : n < 30 ? n + ' 天前' : n < 365 ? Math.floor(n / 30) + ' 個月前' : Math.floor(n / 365) + ' 年前';
+  }
+
+  // ───────── 膠色：把「Lake Green」「透明」「Yellow & Pink Marbled」轉成唱片的顏色 ─────────
+  const VINYL_COLORS = [
+    ['picture', /picture|圖膠|畫膠/i, null],
+    ['clear', /clear|transparent|crystal|透明|水晶/i, 'rgba(225,232,236,.38)'],
+    ['lake', /lake green|teal|turquoise|aqua|seafoam|mint|湖水綠|湖水|薄荷|青/i, '#3FB8AF'],
+    ['black', /black|黑/i, '#141414'],
+    ['white', /white|白/i, '#E9E7E2'],
+    ['red', /red|crimson|紅/i, '#B3202A'],
+    ['blue', /blue|navy|cobalt|藍/i, '#2456A6'],
+    ['green', /green|綠/i, '#2F8F4E'],
+    ['yellow', /yellow|mustard|黃/i, '#E8C547'],
+    ['pink', /pink|rose|粉/i, '#F2A0B9'],
+    ['purple', /purple|violet|lavender|紫/i, '#7B4FA3'],
+    ['orange', /orange|橘|橙/i, '#E07A2E'],
+    ['gold', /gold|金/i, '#C9A227'],
+    ['silver', /silver|grey|gray|銀|灰/i, '#9AA0A6'],
+    ['brown', /brown|coffee|咖啡|棕/i, '#7A4E2D'],
+    ['bone', /bone|cream|beige|米/i, '#E8DFC8']
+  ];
+  function vinylLook(r) {
+    const txt = String(r.vinylColor || '');
+    if (!txt) return { kind: 'black' };
+    const hits = [];
+    VINYL_COLORS.forEach(([name, re, hex]) => {
+      const m = txt.match(re);
+      if (m) hits.push({ name: name, hex: hex, at: m.index });
+    });
+    hits.sort((a, b) => a.at - b.at);
+    if (hits.some((h) => h.name === 'picture') && safeUrl(r.coverUrl)) return { kind: 'picture' };
+    const cols = hits.filter((h) => h.hex && !(h.name === 'green' && hits.some((x) => x.name === 'lake'))).map((h) => h.hex);
+    if (!cols.length) return { kind: 'black' };
+    const mix = /marble|splatter|swirl|smoke|galaxy|混|潑|大理石/i.test(txt);
+    return { kind: cols.length > 1 ? (mix ? 'marble' : 'split') : (cols[0].indexOf('rgba') === 0 ? 'clear' : 'solid'), cols: cols.slice(0, 3) };
+  }
+  function discStyle(r) {
+    const look = vinylLook(r);
+    const grooves = 'repeating-radial-gradient(circle, rgba(0,0,0,.16) 0 1px, transparent 1px 3px)';
+    const shine = 'conic-gradient(from 30deg, rgba(255,255,255,.0) 0deg, rgba(255,255,255,.18) 40deg, rgba(255,255,255,0) 80deg, rgba(255,255,255,0) 180deg, rgba(255,255,255,.14) 220deg, rgba(255,255,255,0) 260deg)';
+    if (look.kind === 'black') return '';
+    if (look.kind === 'picture') return `background:${shine},${grooves},url("${encodeURI(r.coverUrl).replace(/"/g, '%22')}") center/cover;`;
+    if (look.kind === 'clear') return `background:${shine},${grooves},rgba(225,232,236,.38);box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);`;
+    if (look.kind === 'solid') return `background:${shine},${grooves},${look.cols[0]};`;
+    if (look.kind === 'split') return `background:${shine},${grooves},linear-gradient(100deg,${look.cols[0]} 50%,${look.cols[1]} 50%);`;
+    const c = look.cols, stops = [];
+    for (let i = 0; i < 8; i++) stops.push(`${c[i % c.length]} ${i * 45}deg ${(i + 1) * 45}deg`);
+    return `background:${shine},${grooves},conic-gradient(from 12deg, ${stops.join(',')});`;
+  }
+
   const byRecent = (a, b) => String(b.createdAt).localeCompare(String(a.createdAt));
 
   function buildCrateOrder() {
@@ -246,7 +314,7 @@
     const m = path.match(/^\/r\/(.+)$/);
     if (m) return { name: 'detail', id: decodeURIComponent(m[1]) };
     if (path === '/all') return { name: 'all', params: params };
-    if (path === '/add') return { name: 'add' };
+    if (path === '/add') return { name: 'add', params: params };
     if (path === '/stats') return { name: 'stats' };
     return { name: 'home' };
   }
@@ -259,7 +327,7 @@
       const p = r.params;
       S.list = freshList({
         language: p.getAll('lang'), tags: p.getAll('tag'), fav: p.get('fav') === '1',
-        sort: p.get('sort') || 'recent'
+        sort: p.get('sort') || 'recent', location: p.getAll('loc')
       });
     }
     if (!$('#sheet').hidden) closeSheet();
@@ -306,6 +374,8 @@
     const tagCounts = S.settings.tags.map((t) => [t, recs.filter((r) => r.tags.indexOf(t) !== -1)]).filter((x) => x[1].length >= 2)
       .sort((a, b) => b[1].length - a[1].length).slice(0, 2);
     const langs = S.settings.language.map((l) => [l, recs.filter((r) => r.language === l).length]);
+    const unplayed = recs.slice().sort((a, b) => String(a.lastListened || '').localeCompare(String(b.lastListened || '')) || byRecent(b, a)).slice(0, 12);
+    const pre = pendingPreorders().sort((a, b) => String(a.orderDate || a.createdAt).localeCompare(String(b.orderDate || b.createdAt)));
 
     view.innerHTML = `
       <header class="page-head">
@@ -313,7 +383,12 @@
         <a class="icon-btn soft" href="#/all" aria-label="搜尋收藏" style="color:var(--ink)">${I.search}</a>
       </header>
       <section id="crate" class="crate" aria-label="翻唱片箱"></section>
+      ${pre.length ? `<a class="pre-banner" href="#/add?tab=pre">
+        <span class="pre-count mono">${pre.length}</span>
+        <span class="body"><strong>張預訂中</strong><span>最久的「${esc(pre[0].title)}」已經等了 ${daysSince(pre[0].orderDate || pre[0].createdAt) || 0} 天</span></span>
+        ${I.next}</a>` : ''}
       ${shelf('最近新增', recent, '#/all?sort=recent')}
+      ${shelf('好久沒聽', unplayed, '#/all?sort=listened')}
       ${shelf('我的最愛', favs, '#/all?fav=1')}
       ${tagCounts.map((x) => shelf('# ' + x[0], x[1].sort(byRecent).slice(0, 12), '#/all?tag=' + encodeURIComponent(x[0]), true)).join('')}
       <div class="section-head"><h2>依語系瀏覽</h2></div>
@@ -501,7 +576,10 @@
     artist: ['藝人', (a, b) => a.artist.localeCompare(b.artist, 'zh-Hant')],
     purchase: ['購入價（高→低）', (a, b) => (b.purchase || 0) - (a.purchase || 0)],
     market: ['Discogs 最低價（高→低）', (a, b) => (b.marketUSD || 0) - (a.marketUSD || 0)],
-    rating: ['星等（高→低）', (a, b) => (b.rating || 0) - (a.rating || 0)]
+    rating: ['星等（高→低）', (a, b) => (b.rating || 0) - (a.rating || 0)],
+    listened: ['最久沒聽', (a, b) => String(a.lastListened || '').localeCompare(String(b.lastListened || '')) || byRecent(b, a)],
+    plays: ['最常聽', (a, b) => (b.listenCount || 0) - (a.listenCount || 0)],
+    location: ['存放位置', (a, b) => String(a.location || '\uffff').localeCompare(String(b.location || '\uffff'), 'zh-Hant') || a.artist.localeCompare(b.artist, 'zh-Hant')]
   };
 
   function filtered() {
@@ -509,7 +587,7 @@
     const q = L.q.trim().toLowerCase();
     const list = S.records.filter((r) => {
       if (q) {
-        const hay = [r.title, r.artist, r.label, r.catno, r.barcode, r.tracklist, r.tags.join(' ')].join('\n').toLowerCase();
+        const hay = [r.title, r.artist, r.label, r.catno, r.barcode, r.tracklist, r.tags.join(' '), r.location, r.purchaseSource, r.vinylColor, r.myNumber].join('\n').toLowerCase();
         if (hay.indexOf(q) === -1) return false;
       }
       if (L.fav && !r.favorite) return false;
@@ -519,6 +597,7 @@
       if (L.tags.length && !L.tags.some((t) => r.tags.indexOf(t) !== -1)) return false;
       if (L.rating.length && L.rating.indexOf(String(r.rating)) === -1) return false;
       if (L.year.length && L.year.indexOf(r.year) === -1) return false;
+      if (L.location.length && L.location.indexOf(r.location || '未設定') === -1) return false;
       return true;
     });
     return list.sort((SORTS[L.sort] || SORTS.recent)[1]);
@@ -560,12 +639,13 @@
     const box = $('#filter-groups');
     if (!box) return;
     const st = S.settings;
-    const anyOn = S.list.fav || ['language', 'sub', 'tags', 'status', 'rating', 'year'].some((g) => S.list[g].length);
+    const anyOn = S.list.fav || ['language', 'sub', 'tags', 'status', 'rating', 'year', 'location'].some((g) => S.list[g].length);
     box.innerHTML = `
       <div class="filter-row">
         <button class="chip ${S.list.fav ? 'on' : ''}" aria-pressed="${S.list.fav}" data-action="filter-fav">${I.heart.replace('<svg', '<svg width="14" height="14" style="fill:currentColor;stroke:none"')}最愛</button>
         ${anyOn ? '<button class="chip" data-action="filter-clear">清除篩選</button>' : ''}
       </div>
+      ${chipRow('位置', 'location', S.records.some((r) => r.location) ? distinct('location').concat(S.records.some((r) => !r.location) ? ['未設定'] : []) : [])}
       ${chipRow('語系', 'language', st.language)}
       ${chipRow('分類', 'sub', st.sub)}
       ${chipRow('標籤', 'tags', st.tags)}
@@ -586,7 +666,7 @@
         ${coverHTML(r, 'shadow')}
         ${r.favorite ? `<span class="fav" aria-label="最愛">${I.heart}</span>` : ''}
         <span class="t">${esc(r.title)}</span>
-        <span class="a">${esc(r.artist)}${r.year ? ' · ' + esc(r.year) : ''}</span>
+        <span class="a">${esc(S.list.sort === 'location' && r.location ? r.location : r.artist + (r.year ? ' · ' + r.year : ''))}</span>
       </a>`).join('')}</div>
       ${list.length > shown.length ? `<div class="more"><button class="btn btn-outline btn-sm" data-action="more">再顯示 ${Math.min(40, list.length - shown.length)} 張</button></div>` : ''}`;
   }
@@ -677,13 +757,14 @@
       </div>
 
       <div class="d-hero">
-        <div class="disc" aria-hidden="true"><div class="disc-label"><b>${esc(r.title)}</b><i>${esc(r.catno || '33⅓ RPM')}</i><span class="hole"></span></div></div>
+        <div class="disc ${vinylLook(r).kind}" aria-hidden="true" style="${discStyle(r)}">${vinylLook(r).kind === 'picture' ? '<span class="pic-hole"></span>' : `<div class="disc-label"><b>${esc(r.title)}</b><i>${esc(r.myNumber ? 'No. ' + r.myNumber : (r.catno || '33⅓ RPM'))}</i><span class="hole"></span></div>`}</div>
         <div class="sleeve">${coverHTML(r, '', r.title + ' 封面')}</div>
       </div>
 
       <div class="d-title">
         <h1>${esc(r.title)}</h1>
         <span class="artist">${esc(r.artist)}</span>
+        ${r.location ? `<a class="loc" href="#/all?loc=${encodeURIComponent(r.location)}">${I.pin}${esc(r.location)}</a>` : `<button class="loc ghost" data-action="edit">${I.pin}設定存放位置</button>`}
       </div>
 
       <div class="stars" role="group" aria-label="星等評分">
@@ -701,6 +782,11 @@
         ${am ? `<a class="btn primary" href="${esc(am)}" target="_blank" rel="noopener">${I.play}Apple Music</a>`
              : `<button class="btn primary" data-action="find-am">${I.search}找 Apple Music</button>`}
         ${dg ? `<a class="btn ghost" href="${esc(dg)}" target="_blank" rel="noopener">Discogs${I.ext}</a>` : '<span class="btn ghost disabled">Discogs</span>'}
+      </div>
+
+      <div class="d-listen">
+        <button class="btn" data-action="listen">${I.disc}今天聽了</button>
+        <span>${r.listenCount ? `上次聽：${esc(relDays(r.lastListened))}<br><span class="mono">共 ${r.listenCount} 次</span>` : '還沒有聆聽紀錄'}</span>
       </div>
 
       <button class="d-review" data-action="edit-review">
@@ -736,9 +822,25 @@
           <div><dt>條碼</dt><dd class="mono">${dash(r.barcode)}</dd></div>
           <div><dt>介質</dt><dd>${dash(r.format)}</dd></div>
           <div><dt>發行日期</dt><dd class="mono">${dash(r.released)}</dd></div>
+          <div><dt>膠色</dt><dd>${dash(r.vinylColor || '')}</dd></div>
+        </dl>
+      </section>
+
+      <section class="d-sec">
+        <h2>我的這張</h2>
+        <dl class="info-list">
+          <div><dt>我的編號</dt><dd class="mono">${dash(r.myNumber)}</dd></div>
+          <div><dt>唱片品相</dt><dd>${dash(gradeLabel(r.mediaGrade))}</dd></div>
+          <div><dt>封套品相</dt><dd>${dash(gradeLabel(r.sleeveGrade))}</dd></div>
+          <div><dt>購入日期</dt><dd class="mono">${dash(r.purchaseDate)}</dd></div>
+          <div><dt>購入通路</dt><dd>${dash(r.purchaseSource)}</dd></div>
+          <div><dt>存放位置</dt><dd>${dash(r.location)}</dd></div>
           <div><dt>加入收藏</dt><dd class="mono">${dash(fmtDateTime(r.createdAt))}</dd></div>
         </dl>
       </section>
+
+      ${(() => { const v = otherVersions(r); return v.length ? `<div class="section-head" style="padding-left:20px;padding-right:20px"><h2>你也收藏了其他版本</h2></div>
+        <div class="shelf vers" style="padding:0 20px 6px">${v.map((x) => `<a class="shelf-item sm" href="#/r/${encodeURIComponent(x.id)}">${coverHTML(x, 'shadow')}<span class="t">${esc(x.year || '')} ${esc((x.format || '').replace(/^Vinyl\s*/, ''))}</span><span class="a">${esc(x.vinylColor || x.catno || '')}</span></a>`).join('')}</div>` : ''; })()}
 
       ${notes ? `<section class="d-sec" style="padding-bottom:8px">
         <h2>Discogs 筆記</h2>
@@ -765,6 +867,9 @@
       upsert(before); render(true); handleError(e);
     }
   }
+
+  const GRADES = [['M', 'Mint 全新未拆'], ['NM', 'Near Mint 近全新'], ['VG+', 'Very Good Plus 輕微使用痕跡'], ['VG', 'Very Good 明顯使用痕跡'], ['G+', 'Good Plus'], ['G', 'Good'], ['F', 'Fair'], ['P', 'Poor']];
+  function gradeLabel(g) { const x = GRADES.find((q) => q[0] === g); return x ? x[0] + '（' + x[1] + '）' : (g || ''); }
 
   // ───────────────────────── 編輯抽屜 ─────────────────────────
   function openSheet(html, onMount) {
@@ -819,7 +924,23 @@
       return `<button type="button" class="chip ${on ? 'on' : ''}" aria-pressed="${on}" data-tag="${esc(t)}">${esc(t)}</button>`;
     }).join('')}</div></div>`;
   }
+  function datalistHTML(id, values) {
+    const uniq = Array.from(new Set(values.map((x) => String(x || '').trim()).filter(Boolean)));
+    return `<datalist id="${id}">${uniq.map((v) => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
+  }
+  function gradeSelectHTML(name, label, value) {
+    return `<label class="field"><span>${esc(label)}</span><select name="${name}"><option value="">—</option>
+      ${GRADES.map((g) => `<option value="${g[0]}" ${g[0] === value ? 'selected' : ''}>${g[0]}・${esc(g[1])}</option>`).join('')}</select></label>`;
+  }
+  function bindColorChips(root) {
+    $$('[data-color]', root).forEach((b) => b.addEventListener('click', () => {
+      const inp = $('[name="vinylColor"]', root);
+      const v = b.dataset.color;
+      inp.value = inp.value && v !== '黑' ? (inp.value.indexOf(v) === -1 ? inp.value + ' / ' + v : inp.value) : v;
+    }));
+  }
   function bindTagPicker(root) {
+    bindColorChips(root);
     $$('[data-tag]', root).forEach((b) => b.addEventListener('click', () => {
       const on = !b.classList.contains('on'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
     }));
@@ -848,6 +969,23 @@
         ${textareaHTML('review', '我的聽感', r.review, 3)}
         ${inputHTML('appleMusicUrl', 'Apple Music 連結', r.appleMusicUrl, { extra: 'inputmode="url"' })}
       </div>
+      <div class="form-box"><h3>我的這張</h3>
+        <div class="form-grid">
+          ${inputHTML('purchaseDate', '購入日期', r.purchaseDate, { extra: 'type="date"' })}
+          ${inputHTML('purchaseSource', '購入通路', r.purchaseSource, { extra: 'list="dl-source" placeholder="例如：誠品、佳佳"' })}
+          ${inputHTML('location', '存放位置', r.location, { extra: 'list="dl-location" placeholder="例如：客廳櫃 A-3"' })}
+          ${inputHTML('myNumber', '我的編號', r.myNumber, { extra: 'placeholder="例如：0347 / 1000"' })}
+          ${gradeSelectHTML('mediaGrade', '唱片品相', r.mediaGrade)}
+          ${gradeSelectHTML('sleeveGrade', '封套品相', r.sleeveGrade)}
+        </div>
+        <div class="field"><span>膠色</span>
+          <input name="vinylColor" value="${esc(r.vinylColor)}" placeholder="例如：湖水綠、透明、Yellow & Pink">
+          <div class="tag-picker" style="margin-top:4px">${['黑', '透明', '白', '紅', '藍', '湖水綠', '綠', '黃', '粉', '紫', '橘', '金', '大理石', '圖膠'].map((c) => `<button type="button" class="chip" data-color="${c}">${c}</button>`).join('')}</div>
+        </div>
+        <input type="hidden" name="masterId" value="${esc(r.masterId)}">
+        ${datalistHTML('dl-source', distinct('purchaseSource').concat((S.preorders || []).map((p) => p.source)).concat(['誠品音樂', '佳佳唱片', '蝦皮', 'Discogs', '博客來', '演唱會現場']))}
+        ${datalistHTML('dl-location', distinct('location'))}
+      </div>
       <div class="form-box"><h3>發行資訊</h3>
         ${inputHTML('label', '唱片公司', r.label)}
         <div class="form-grid">
@@ -869,7 +1007,9 @@
       tags: readTags(root), status: v('status'), purchasePrice: v('purchasePrice'),
       rating: v('rating'), favorite: v('favorite') === '1', review: v('review'), appleMusicUrl: v('appleMusicUrl'),
       label: v('label'), catno: v('catno'), barcode: v('barcode'), format: v('format'), released: v('released'),
-      tracklist: v('tracklist'), discogsNotes: v('discogsNotes'), discogsUrl: v('discogsUrl'), coverUrl: v('coverUrl')
+      tracklist: v('tracklist'), discogsNotes: v('discogsNotes'), discogsUrl: v('discogsUrl'), coverUrl: v('coverUrl'),
+      purchaseDate: v('purchaseDate'), purchaseSource: v('purchaseSource'), location: v('location'), myNumber: v('myNumber'),
+      mediaGrade: v('mediaGrade'), sleeveGrade: v('sleeveGrade'), vinylColor: v('vinylColor'), masterId: v('masterId')
     };
   }
 
@@ -921,9 +1061,19 @@
   // ───────────────────────── 新增 ─────────────────────────
   function renderAdd(view) {
     const A = S.add;
+    const tabParam = route().params && route().params.get('tab');
+    if (tabParam) A.tab = tabParam === 'pre' ? 'pre' : 'new';
     if (A.form) { renderAddForm(view); return; }
+    const pend = pendingPreorders().length;
+    const tabs = `<div class="seg" role="tablist" aria-label="新增方式">
+        <a role="tab" href="#/add?tab=new" class="${A.tab !== 'pre' ? 'on' : ''}" aria-selected="${A.tab !== 'pre'}">新增唱片</a>
+        <a role="tab" href="#/add?tab=pre" class="${A.tab === 'pre' ? 'on' : ''}" aria-selected="${A.tab === 'pre'}">預訂中${pend ? ` <span class="mono">${pend}</span>` : ''}</a>
+      </div>`;
+    if (A.tab === 'pre') { renderPreorders(view, tabs); return; }
     view.innerHTML = `
       <header class="page-head"><div><span class="eyebrow">Discogs 資料庫</span><h1>新增唱片</h1></div></header>
+      ${tabs}
+      ${A.fromPre ? `<div class="pre-note">正在收進預訂的「${esc(A.fromPre.title)}」— 選好版本後，購入價格與來源會自動帶入。<button class="link-btn" data-action="cancel-pre">取消</button></div>` : ''}
       <form class="add-search" id="add-search">
         <label class="search-bar">${I.search}<span class="sr-only">搜尋</span>
           <input id="add-q" type="search" enterkeyhint="search" placeholder="藝人、專輯或條碼數字" value="${esc(A.query)}" autocomplete="off"></label>
@@ -932,6 +1082,95 @@
       <p class="add-tip">點右邊的按鈕可以直接用手機相機掃唱片背面的條碼。</p>
       <div id="add-results" class="results">${resultsHTML()}</div>`;
     $('#add-search').addEventListener('submit', (e) => { e.preventDefault(); doSearch($('#add-q').value); });
+  }
+
+  // ───────── 預訂清單 ─────────
+  function renderPreorders(view, tabs) {
+    const pend = pendingPreorders().sort((a, b) => String(a.orderDate || a.createdAt).localeCompare(String(b.orderDate || b.createdAt)));
+    const done = (S.preorders || []).filter((p) => p.status === '已到貨').slice(-10).reverse();
+    const total = pend.reduce((s, p) => s + (p.price || 0), 0);
+    view.innerHTML = `
+      <header class="page-head"><div><span class="eyebrow">${pend.length} 張等待中${total ? '・共 ' + fmtNT(total) : ''}</span><h1>新增唱片</h1></div></header>
+      ${tabs}
+      <div class="pad" style="padding-top:14px"><button class="btn btn-ink btn-block" data-action="pre-new">${I.plus}記一筆預訂</button></div>
+      <div class="pre-list">
+        ${pend.length ? pend.map((p) => {
+          const days = daysSince(p.orderDate || p.createdAt);
+          return `<article class="pre-card">
+            <div class="pre-main">
+              <strong>${esc(p.title)}</strong>
+              <span class="muted">${esc(p.artist || '')}</span>
+              <span class="pre-meta mono">${esc([p.source, p.price ? fmtNT(p.price) : ''].filter(Boolean).join(' · '))}</span>
+              <span class="pre-meta">預訂 ${esc(p.orderDate || String(p.createdAt).slice(0, 10))}・已等 <b>${days || 0}</b> 天${p.expectedDate ? '・預計 ' + esc(p.expectedDate) : ''}</span>
+              ${p.note ? `<span class="pre-meta">${esc(p.note)}</span>` : ''}
+            </div>
+            <div class="pre-actions">
+              <button class="btn btn-ink btn-sm" data-action="pre-arrive" data-id="${esc(p.id)}">到貨了</button>
+              <button class="icon-btn soft" style="color:var(--ink)" data-action="pre-edit" data-id="${esc(p.id)}" aria-label="編輯預訂">${I.edit}</button>
+            </div>
+          </article>`;
+        }).join('') : '<p class="empty">目前沒有預訂中的唱片。<br>下訂之後記一筆，就不怕忘記。</p>'}
+      </div>
+      ${done.length ? `<div class="section-head"><h2>最近到貨</h2></div><ul class="pre-done">${done.map((p) => `<li>${p.recordId && S.byId.get(p.recordId) ? `<a href="#/r/${encodeURIComponent(p.recordId)}">${esc(p.title)}</a>` : esc(p.title)}<span class="muted">${esc(p.artist || '')}</span></li>`).join('')}</ul>` : ''}`;
+  }
+
+  function openPreorderForm(p) {
+    const isNew = !p;
+    p = p || { orderDate: new Date().toISOString().slice(0, 10) };
+    openSheet(`<h2 id="sheet-title">${isNew ? '記一筆預訂' : '編輯預訂'}</h2>
+      <form id="pre-form" style="display:flex;flex-direction:column;gap:12px">
+        ${inputHTML('title', '專輯名稱', p.title, { extra: 'required' })}
+        ${inputHTML('artist', '藝人', p.artist)}
+        <div class="form-grid">
+          ${inputHTML('source', '購買來源', p.source, { extra: 'list="dl-pre-source" placeholder="例如：誠品、佳佳"' })}
+          ${inputHTML('price', '價格（NT$）', p.price || '', { extra: 'inputmode="decimal"' })}
+          ${inputHTML('orderDate', '預訂日期', p.orderDate, { extra: 'type="date"' })}
+          ${inputHTML('expectedDate', '預計到貨', p.expectedDate, { extra: 'placeholder="例如：2026 年 12 月"' })}
+        </div>
+        ${textareaHTML('note', '備註（訂單編號、版本、贈品…）', p.note, 3)}
+        ${datalistHTML('dl-pre-source', distinct('purchaseSource').concat((S.preorders || []).map((x) => x.source)).concat(['誠品音樂', '佳佳唱片', '蝦皮', '博客來', '五大唱片', '官方網站']))}
+        <div class="form-actions"><button type="button" class="btn btn-outline" data-action="close-sheet">取消</button><button type="submit" class="btn btn-ink" id="pre-save">儲存</button></div>
+        ${isNew ? '' : '<button type="button" class="btn btn-danger btn-block" id="pre-del">刪除這筆預訂</button>'}
+      </form>`, (root) => {
+      const form = $('#pre-form', root);
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const v = (n) => $(`[name="${n}"]`, form).value.trim();
+        const data = { title: v('title'), artist: v('artist'), source: v('source'), price: v('price'), orderDate: v('orderDate'), expectedDate: v('expectedDate'), note: v('note') };
+        if (!data.title) { toast('專輯名稱不可空白', true); return; }
+        const dup = S.records.find((r) => normKey(r.title) === normKey(data.title) && (!data.artist || normKey(r.artist) === normKey(data.artist)));
+        if (isNew && dup) {
+          closeSheet();
+          const ok = await confirmSheet('你已經收藏過這張', `唱片櫃裡已經有「${dup.title}」（${dup.artist}）。確定還要記這筆預訂嗎？`, '還是要記');
+          if (!ok) return;
+          openPreorderForm(Object.assign({}, data));
+          return;
+        }
+        const btn = $('#pre-save', form); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try {
+          const saved = isNew ? await API.preorderAdd(data) : await API.preorderUpdate(p.id, data);
+          S.preorders = (S.preorders || []).filter((x) => x.id !== saved.id).concat([saved]);
+          persist(); closeSheet(); toast(isNew ? '已記下預訂' : '已儲存'); render(true);
+        } catch (err) { btn.disabled = false; btn.textContent = '儲存'; handleError(err); }
+      });
+      const del = $('#pre-del', root);
+      if (del) del.addEventListener('click', async () => {
+        closeSheet();
+        if (!(await confirmSheet('刪除這筆預訂？', `「${p.title}」會從預訂清單移除。`, '刪除', true))) return;
+        try { await API.preorderRemove(p.id); S.preorders = S.preorders.filter((x) => x.id !== p.id); persist(); toast('已刪除'); render(true); } catch (err) { handleError(err); }
+      });
+    });
+  }
+
+  function startArrival(p) {
+    S.add = { query: [p.artist, p.title].filter(Boolean).join(' '), results: null, form: null, busy: false, tab: 'new', fromPre: p };
+    location.hash = '#/add?tab=new';
+    setTimeout(() => { if ($('#add-q')) doSearch(S.add.query); }, 30);
+  }
+  function preorderPrefill() {
+    const p = S.add.fromPre;
+    if (!p) return {};
+    return { purchasePrice: p.price || '', purchase: p.price || '', purchaseSource: p.source || '', purchaseDate: p.orderDate || '' };
   }
 
   function resultsHTML() {
@@ -974,7 +1213,7 @@
       S.add.form = Object.assign({
         id: 'new', tags: [], rating: 0, favorite: false, review: '', status: S.settings.status[0] || '',
         language: S.settings.language[0] || '', subCategory: S.settings.sub[0] || '', appleMusicUrl: '', purchase: ''
-      }, d, { barcode: d.barcode || (isBarcode ? S.add.query.replace(/\s/g, '') : ''), coverUrl: d.coverUrl || x.cover });
+      }, d, { barcode: d.barcode || (isBarcode ? S.add.query.replace(/\s/g, '') : ''), coverUrl: d.coverUrl || x.cover }, preorderPrefill());
       render();
       API.appleMusic(d.artist, d.title).then((url) => {
         if (!url || !S.add.form || S.add.form.releaseId !== d.releaseId) return;
@@ -1026,11 +1265,23 @@
         return;
       }
       upsert(res.record);
+      // 是預訂到貨？把那筆預訂標成已到貨
+      let pre = S.add.fromPre;
+      if (!pre) {
+        const match = pendingPreorders().find((p) => normKey(p.title) && (normKey(rec.title).indexOf(normKey(p.title)) !== -1 || normKey(p.title).indexOf(normKey(rec.title)) !== -1));
+        if (match && await confirmSheet('這是你預訂的那張嗎？', `預訂清單裡有「${match.title}」${match.artist ? '（' + match.artist + '）' : ''}。要標記為已到貨嗎？`, '標記已到貨')) pre = match;
+      }
+      if (pre) {
+        try {
+          const upd = await API.preorderUpdate(pre.id, { status: '已到貨', recordId: res.record.id });
+          S.preorders = (S.preorders || []).filter((x) => x.id !== upd.id).concat([upd]);
+        } catch (err) { handleError(err); }
+      }
       const mv = parseFloat(String(rec.marketValue).replace(/[^0-9.]/g, ''));
       if (!isNaN(mv) && String(rec.marketValue).indexOf('USD') !== -1) (S.history[res.record.id] = []).push({ t: res.record.createdAt, usd: mv });
       persist();
-      S.add = { query: '', results: null, form: null, busy: false };
-      toast('已收進唱片櫃');
+      S.add = { query: '', results: null, form: null, busy: false, tab: 'new' };
+      toast(pre ? '預訂到貨，已收進唱片櫃' : '已收進唱片櫃');
       location.hash = '#/r/' + encodeURIComponent(res.record.id);
     } catch (e) {
       btn.disabled = false; btn.textContent = '收進唱片櫃';
@@ -1083,6 +1334,55 @@
     return `<div class="bar-list">${pairs.map((p) => `<div class="bar"><span class="name">${esc(p[0])}</span>
       <span class="track"><span class="fill" style="display:block;width:${(p[1] / max * 100).toFixed(1)}%"></span></span><span class="n">${p[1]}</span></div>`).join('')}</div>`;
   }
+  /** 直條圖（單一系列）。每根柱子有 data-tip，點或滑過時在上方讀數列顯示數值 */
+  function columnChart(data, fmt, readDefault) {
+    const W = 340, H = 150, PB = 22, PT = 14;
+    const max = Math.max.apply(null, data.map((d) => d.value).concat(1));
+    const bw = W / data.length;
+    const ticks = [0, max / 2, max];
+    return `<div class="chart">
+      <p class="chart-readout mono" aria-live="polite">${esc(readDefault)}</p>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(data.map((d) => d.label + ' ' + fmt(d.value)).join('，'))}">
+        ${ticks.map((t) => { const y = PT + (H - PB - PT) * (1 - t / max); return `<line x1="0" x2="${W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="grid"/>`; }).join('')}
+        ${data.map((d, i) => {
+          const h = Math.max((H - PB - PT) * d.value / max, d.value ? 2 : 0);
+          const x = i * bw + bw * 0.18, w = bw * 0.64, y = H - PB - h, r = Math.min(4, w / 2, h);
+          const path = h ? `M${x},${H - PB} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${H - PB} Z` : '';
+          const tip = `${d.label}：${fmt(d.value)}${d.sub ? '（' + d.sub + '）' : ''}`;
+          return `<g class="col" data-tip="${esc(tip)}" tabindex="0"><rect x="${i * bw}" y="0" width="${bw}" height="${H}" fill="transparent"/>${path ? `<path d="${path}"/>` : ''}
+            ${i % 2 === data.length % 2 || data.length <= 6 ? `<text x="${x + w / 2}" y="${H - 6}" text-anchor="middle">${esc(d.short || d.label)}</text>` : ''}<title>${esc(tip)}</title></g>`;
+        }).join('')}
+      </svg></div>`;
+  }
+  /** 折線圖（單一系列，累積張數） */
+  function lineChart(data, fmt, readDefault) {
+    const W = 340, H = 150, PB = 22, PT = 14, PX = 6;
+    const max = Math.max.apply(null, data.map((d) => d.value).concat(1));
+    const x = (i) => PX + (data.length > 1 ? i / (data.length - 1) : 0.5) * (W - 2 * PX);
+    const y = (v) => PT + (H - PB - PT) * (1 - v / max);
+    const pts = data.map((d, i) => `${x(i).toFixed(1)},${y(d.value).toFixed(1)}`).join(' ');
+    const last = data.length - 1;
+    const step = Math.max(1, Math.ceil(data.length / 6));
+    return `<div class="chart">
+      <p class="chart-readout mono" aria-live="polite">${esc(readDefault)}</p>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc('收藏累積：' + data.map((d) => d.label + ' ' + fmt(d.value)).join('，'))}">
+        ${[0, max / 2, max].map((t) => `<line x1="0" x2="${W}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" class="grid"/>`).join('')}
+        <polyline points="${pts}" class="line"/>
+        <circle cx="${x(last)}" cy="${y(data[last].value)}" r="4.5" class="dot"/>
+        ${data.map((d, i) => `<g class="col" data-tip="${esc(d.label + '：累積 ' + fmt(d.value))}"><rect x="${x(i) - (W / data.length) / 2}" y="0" width="${W / data.length}" height="${H}" fill="transparent"/>
+          ${i % step === 0 || i === last ? `<text x="${Math.min(Math.max(x(i), 14), W - 14)}" y="${H - 6}" text-anchor="middle">${esc(d.short)}</text>` : ''}<title>${esc(d.label + '：累積 ' + fmt(d.value))}</title></g>`).join('')}
+      </svg></div>`;
+  }
+  function monthSeries(n) {
+    const out = [], now = new Date();
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      out.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+    }
+    return out;
+  }
+  const monthOf = (r) => String(r.purchaseDate || r.createdAt || '').slice(0, 7);
+
   function countBy(fn) {
     const m = {};
     S.records.forEach((r) => { const k = fn(r); if (k) m[k] = (m[k] || 0) + 1; });
@@ -1096,9 +1396,23 @@
     const cost = comp.reduce((s, r) => s + r.purchase, 0);
     const mkt = comp.reduce((s, r) => s + r.marketUSD * S.rate, 0);
     const pl = mkt - cost;
-    const months = {};
-    R.forEach((r) => { const m = String(r.createdAt).slice(0, 7); if (m) months[m] = (months[m] || 0) + 1; });
-    const monthPairs = Object.keys(months).sort().slice(-12).map((m) => [m, months[m]]);
+    // 每月花費（依購入日期，沒有就用加入收藏的時間）
+    const last12 = monthSeries(12);
+    const spendData = last12.map((m) => {
+      const rs = R.filter((r) => monthOf(r) === m);
+      return { label: m, short: String(Number(m.slice(5))) + '月', value: rs.reduce((t, r) => t + (r.purchase || 0), 0), sub: rs.length + ' 張' };
+    });
+    const spend12 = spendData.reduce((t, d) => t + d.value, 0);
+    // 收藏累積成長
+    const allMonths = R.map(monthOf).filter(Boolean).sort();
+    let growth = [];
+    if (allMonths.length) {
+      const first = allMonths[0], span = monthSeries(240).filter((m) => m >= first);
+      let acc = 0;
+      growth = span.map((m) => { acc += allMonths.filter((x) => x === m).length; return { label: m, short: m.slice(2, 4) + '/' + m.slice(5), value: acc }; });
+    }
+    const listens = R.reduce((t, r) => t + (r.listenCount || 0), 0);
+    const topPlayed = R.filter((r) => r.listenCount).sort((a, b) => b.listenCount - a.listenCount).slice(0, 5);
     const topValue = R.filter((r) => r.marketUSD != null).sort((a, b) => b.marketUSD - a.marketUSD).slice(0, 5);
     const topGain = comp.map((r) => [r, (r.marketUSD * S.rate - r.purchase) / r.purchase]).sort((a, b) => b[1] - a[1]).slice(0, 5);
     const pi = S.priceInfo || {};
@@ -1128,9 +1442,16 @@
         <p class="mono" id="price-text" style="margin:8px 0 0;font-size:12px"></p>
       </div>
 
+      <div class="section-head"><h2>每月花費</h2></div>
+      <div class="card">${columnChart(spendData, (v) => fmtNT(v), '近 12 個月共 ' + fmtNT(spend12) + '・點柱子看各月')}
+        <p class="muted" style="margin:6px 0 0;font-size:12px">依「購入日期」計算，沒填的用加入收藏的時間。</p></div>
+      ${growth.length > 1 ? `<div class="section-head"><h2>收藏成長</h2></div><div class="card">${lineChart(growth, (v) => v + ' 張', '目前 ' + R.length + ' 張')}</div>` : ''}
+      <div class="section-head"><h2>聆聽</h2></div>
+      <div class="card">${topPlayed.length ? `<p class="mono" style="margin:0 0 6px">共聽了 ${listens} 次</p><ol class="rank">${topPlayed.map((r) => rankItem(r, r.listenCount + ' 次')).join('')}</ol>` : '<p class="muted" style="margin:0">還沒有聆聽紀錄。在唱片詳情按「今天聽了」就會開始累積。</p>'}</div>
       <div class="section-head"><h2>語系</h2></div><div class="card">${barsHTML(countBy((r) => r.language))}</div>
       <div class="section-head"><h2>最常收藏的藝人</h2></div><div class="card">${barsHTML(countBy((r) => r.artist).slice(0, 8))}</div>
-      <div class="section-head"><h2>每月新增</h2></div><div class="card">${barsHTML(monthPairs)}</div>
+      ${R.some((r) => r.purchaseSource) ? `<div class="section-head"><h2>購入通路</h2></div><div class="card">${barsHTML(countBy((r) => r.purchaseSource).slice(0, 8))}</div>` : ''}
+      ${R.some((r) => r.location) ? `<div class="section-head"><h2>存放位置</h2></div><div class="card">${barsHTML(countBy((r) => r.location || '未設定'))}</div>` : ''}
       ${topValue.length ? `<div class="section-head"><h2>最低價最高的唱片</h2></div><div class="card"><ol class="rank">${topValue.map((r) => rankItem(r, fmtUSD(r.marketUSD))).join('')}</ol></div>` : ''}
       ${topGain.length ? `<div class="section-head"><h2>漲最多（相對購入價）</h2></div><div class="card"><ol class="rank">${topGain.map((x) => rankItem(x[0], (x[1] >= 0 ? '+' : '−') + Math.abs(x[1] * 100).toFixed(0) + '%')).join('')}</ol></div>` : ''}
       <div class="section-head"><h2>狀態</h2></div><div class="card">${barsHTML(countBy((r) => r.status))}</div>
@@ -1163,6 +1484,17 @@
       if ($('#price-btn')) $('#price-btn').disabled = false;
     }
   }
+
+  // 圖表讀數：點或滑過柱子／月份時，在圖表上方顯示數值
+  function showTip(g) {
+    const chart = g.closest('.chart');
+    if (!chart) return;
+    $$('.col.on', chart).forEach((x) => x.classList.remove('on'));
+    g.classList.add('on');
+    $('.chart-readout', chart).textContent = g.dataset.tip;
+  }
+  document.addEventListener('pointerover', (e) => { const g = e.target.closest && e.target.closest('.chart .col'); if (g) showTip(g); });
+  document.addEventListener('focusin', (e) => { const g = e.target.closest && e.target.closest('.chart .col'); if (g) showTip(g); });
 
   // ───────────────────────── 事件委派 ─────────────────────────
   document.addEventListener('click', async (e) => {
@@ -1217,10 +1549,20 @@
       case 'close-scanner': closeScanner(); break;
       case 'pick': pickResult(Number(el.dataset.index)); break;
       case 'manual':
-        S.add.form = { id: 'new', title: '', artist: '', tags: [], rating: 0, favorite: false, status: S.settings.status[0] || '', language: S.settings.language[0] || '', subCategory: S.settings.sub[0] || '', barcode: /^\d{8,14}$/.test(S.add.query) ? S.add.query : '' };
+        S.add.form = Object.assign({ id: 'new', title: S.add.fromPre ? S.add.fromPre.title : '', artist: S.add.fromPre ? S.add.fromPre.artist : '', tags: [], rating: 0, favorite: false, status: S.settings.status[0] || '', language: S.settings.language[0] || '', subCategory: S.settings.sub[0] || '', barcode: /^\d{8,14}$/.test(S.add.query) ? S.add.query : '' }, preorderPrefill());
         render(); break;
       case 'add-back': S.add.form = null; render(); break;
       case 'update-prices': updateAllPrices(); break;
+      case 'pre-new': openPreorderForm(null); break;
+      case 'pre-edit': openPreorderForm((S.preorders || []).find((x) => x.id === el.dataset.id)); break;
+      case 'pre-arrive': { const p = (S.preorders || []).find((x) => x.id === el.dataset.id); if (p) startArrival(p); break; }
+      case 'cancel-pre': S.add.fromPre = null; render(true); break;
+      case 'listen':
+        if (!rec) break;
+        el.disabled = true;
+        try { const saved = await API.listen(rec.id); upsert(saved); toast('記下了，祝聆聽愉快'); render(true); }
+        catch (err) { handleError(err); el.disabled = false; }
+        break;
       case 'reload': toast('重新載入中…'); refresh(true).then(() => toast('資料已更新')); break;
       case 'logout': {
         const ok = await confirmSheet('登出？', '登出後，這台裝置需要重新輸入密碼才能看收藏。', '登出', true);

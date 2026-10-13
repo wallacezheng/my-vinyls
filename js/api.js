@@ -64,6 +64,10 @@
     add: (record, force) => call('add', { record: record, force: !!force }),
     update: (id, updates) => call('update', { id: id, updates: updates }),
     remove: (id) => call('remove', { id: id }),
-    priceBatch: (reset) => call('priceBatch', { reset: !!reset })
+    priceBatch: (reset) => call('priceBatch', { reset: !!reset }),
+    listen: (id) => call('listen', { id: id }),
+    preorderAdd: (p) => call('preorderAdd', { preorder: p }),
+    preorderUpdate: (id, updates) => call('preorderUpdate', { id: id, updates: updates }),
+    preorderRemove: (id) => call('preorderRemove', { id: id })
   };
 })();
