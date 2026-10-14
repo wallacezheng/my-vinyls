@@ -447,3 +447,13 @@ img { -webkit-user-drag: none; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.25);
 }
 .tidy-bar .btn { background: var(--bg); color: var(--ink); }
+
+/* 液態膠：唱片中間有液體緩慢流動 */
+.disc.liquid::before {
+  content: ''; position: absolute; inset: 14%; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 20%, rgba(255,255,255,.28) 26%, transparent 34% 58%, rgba(255,255,255,.2) 66%, transparent 74%);
+  animation: liquid 9s linear infinite; mix-blend-mode: screen;
+}
+.disc.liquid .disc-label { position: relative; z-index: 1; }
+@keyframes liquid { to { transform: rotate(-360deg); } }
+@media (prefers-reduced-motion: reduce) { .disc.liquid::before { animation: none; } }

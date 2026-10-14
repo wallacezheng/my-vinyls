@@ -213,7 +213,8 @@
 
   // ───────── 膠色：把「Lake Green」「透明」「Yellow & Pink Marbled」轉成唱片的顏色 ─────────
   const VINYL_COLORS = [
-    ['picture', /picture|圖膠|畫膠/i, null],
+    ['liquid', /liquid|液態|液体|液體/i, null],
+    ['picture', /picture|圖片膠|圖膠|画膠|畫膠|图片胶/i, null],
     ['clear', /clear|transparent|crystal|透明|水晶/i, 'rgba(225,232,236,.38)'],
     ['lake', /lake green|teal|turquoise|aqua|seafoam|mint|湖水綠|湖水|薄荷|青/i, '#3FB8AF'],
     ['black', /black|黑/i, '#141414'],
@@ -240,6 +241,10 @@
     });
     hits.sort((a, b) => a.at - b.at);
     if (hits.some((h) => h.name === 'picture') && safeUrl(r.coverUrl)) return { kind: 'picture' };
+    if (hits.some((h) => h.name === 'liquid')) {
+      const tint = hits.find((h) => h.hex && h.hex[0] === '#' && h.name !== 'black');
+      return { kind: 'liquid', cols: [tint ? tint.hex : '#46B3C9'] };
+    }
     const cols = hits.filter((h) => h.hex && !(h.name === 'green' && hits.some((x) => x.name === 'lake'))).map((h) => h.hex);
     if (!cols.length) return { kind: 'black' };
     const mix = /marble|splatter|swirl|smoke|galaxy|混|潑|大理石/i.test(txt);
@@ -251,6 +256,10 @@
     const shine = 'conic-gradient(from 30deg, rgba(255,255,255,.0) 0deg, rgba(255,255,255,.18) 40deg, rgba(255,255,255,0) 80deg, rgba(255,255,255,0) 180deg, rgba(255,255,255,.14) 220deg, rgba(255,255,255,0) 260deg)';
     if (look.kind === 'black') return '';
     if (look.kind === 'picture') return `background:${shine},${grooves},url("${encodeURI(r.coverUrl).replace(/"/g, '%22')}") center/cover;`;
+    if (look.kind === 'liquid') {
+      const t = look.cols[0];
+      return `background:${shine},${grooves},radial-gradient(circle at 34% 38%, rgba(255,255,255,.45) 0 3%, transparent 3.6%),radial-gradient(circle at 63% 30%, rgba(255,255,255,.35) 0 2%, transparent 2.6%),radial-gradient(circle at 58% 68%, rgba(255,255,255,.3) 0 2.6%, transparent 3.2%),radial-gradient(circle, ${t}e6 0 40%, ${t}99 62%, ${t}66 100%);--liquid:${t};box-shadow:inset 0 0 0 6px rgba(255,255,255,.18);`;
+    }
     if (look.kind === 'clear') return `background:${shine},${grooves},rgba(225,232,236,.38);box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);`;
     if (look.kind === 'solid') return `background:${shine},${grooves},${look.cols[0]};`;
     if (look.kind === 'split') return `background:${shine},${grooves},linear-gradient(100deg,${look.cols[0]} 50%,${look.cols[1]} 50%);`;
@@ -983,7 +992,7 @@
         </div>
         <div class="field"><span>膠色</span>
           <input name="vinylColor" value="${esc(r.vinylColor)}" placeholder="例如：湖水綠、透明、Yellow & Pink">
-          <div class="tag-picker" style="margin-top:4px">${['黑', '透明', '白', '紅', '藍', '湖水綠', '綠', '黃', '粉', '紫', '橘', '金', '大理石', '圖膠'].map((c) => `<button type="button" class="chip" data-color="${c}">${c}</button>`).join('')}</div>
+          <div class="tag-picker" style="margin-top:4px">${['黑', '透明', '白', '紅', '藍', '湖水綠', '綠', '黃', '粉', '紫', '橘', '金', '大理石', '液態膠', '圖片膠'].map((c) => `<button type="button" class="chip" data-color="${c}">${c}</button>`).join('')}</div>
         </div>
         <input type="hidden" name="masterId" value="${esc(r.masterId)}">
         ${datalistHTML('dl-source', distinct('purchaseSource').concat((S.preorders || []).map((p) => p.source)).concat(['誠品音樂', '佳佳唱片', '蝦皮', 'Discogs', '博客來', '演唱會現場']))}
