@@ -1273,14 +1273,16 @@
     if (!days) return;
     toast('檢查 Gmail 中，可能要一兩分鐘…');
     try {
-      let total = 0;
+      let total = 0, stopped = '', left = 0;
       for (let i = 0; i < 6; i++) {
         const r = await API.mailScan(days);
-        total += r.found;
+        total += r.found; left = r.remaining;
+        if (r.stopped) { stopped = r.stopped; break; }
         if (!r.remaining) break;
       }
       await refresh(true);
-      toast(total ? `找到 ${total} 筆黑膠訂單，請確認` : '沒有找到新的黑膠訂單');
+      if (stopped) toast(`找到 ${total} 筆；Gemini 暫時忙線，還有 ${left} 封沒處理，過幾分鐘再按一次「立即檢查」`, true);
+      else toast(total ? `找到 ${total} 筆黑膠訂單，請確認` : '沒有找到新的黑膠訂單');
       render(true);
     } catch (e) { handleError(e); }
   }
