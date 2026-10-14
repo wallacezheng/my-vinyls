@@ -73,6 +73,7 @@
     bulkUpdate: (items) => call('bulkUpdate', { items: items }),
     mailScan: (days) => call('mailScan', { days: days }),
     mailUpdate: (id, updates) => call('mailUpdate', { id: id, updates: updates }),
-    parseImage: (image, mime) => call('parseImage', { image: image, mime: mime })
+    parseImage: (image, mime) => call('parseImage', { image: image, mime: mime }),
+    parseText: (text) => call('parseText', { text: text })
   };
 })();

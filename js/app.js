@@ -1153,6 +1153,11 @@
         <button class="btn btn-ink" data-action="pre-new">${I.plus}記一筆預訂</button>
         <label class="btn btn-outline">${I.image}上傳購買截圖<input type="file" accept="image/*" id="pre-img" hidden></label>
       </div>
+      <form class="quick-box" id="quick-form">
+        <label for="quick-text"><strong>快速輸入</strong><span class="muted">貼上 Gemini 摘要、訂單文字，或直接打一句話；也可以直接貼上截圖</span></label>
+        <textarea id="quick-text" rows="3" placeholder="例如：昨天在佳佳預購五月天《乾杯》彩膠 1580 元，12 月到貨"></textarea>
+        <button class="btn btn-ink btn-sm" type="submit" id="quick-go">交給 Gemini 整理</button>
+      </form>
       ${mailInboxHTML()}
       <div class="pre-list">
         ${pend.length ? pend.map((p) => {
@@ -1222,15 +1227,31 @@
     try {
       const b64 = await shrinkImage(file);
       const r = await API.parseImage(b64, 'image/jpeg');
+      handleParsed(r, '這張圖裡沒有找到黑膠商品');
+    } catch (e) { handleError(e); }
+  }
+  async function parseQuickText(text) {
+    const btn = $('#quick-go');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+    try {
+      await loadS2T();
+      const r = await API.parseText(text);
+      if (handleParsed(r, '這段文字裡沒有找到黑膠唱片，試著寫清楚藝人和專輯名稱') && $('#quick-text')) $('#quick-text').value = '';
+    } catch (e) { handleError(e); }
+    finally { if ($('#quick-go')) { $('#quick-go').disabled = false; $('#quick-go').textContent = '交給 Gemini 整理'; } }
+  }
+  function handleParsed(r, emptyMsg) {
+    {
       const items = (r.items || []).filter((x) => x.title);
-      if (!items.length) { toast('這張圖裡沒有找到黑膠商品', true); return; }
+      if (!items.length) { toast(emptyMsg, true); return false; }
       S.imgPick = { r: r, items: items.map((it) => ({
         title: toTrad(it.title), artist: toTrad(it.artist || ''), source: r.store || '', price: it.price || '',
         orderDate: r.order_date || new Date().toISOString().slice(0, 10), expectedDate: it.expected_date || '',
         note: [r.order_no ? '訂單 ' + r.order_no : '', it.is_preorder ? '預購' : '', it.note || ''].filter(Boolean).join('；')
       })) };
       showImgPick();
-    } catch (e) { handleError(e); }
+      return true;
+    }
   }
   function showImgPick() {
     const P = S.imgPick;
@@ -1251,6 +1272,25 @@
       }));
     });
   }
+  // 快速輸入：送出文字；貼上圖片就直接辨識
+  document.addEventListener('submit', (e) => {
+    if (e.target && e.target.id === 'quick-form') {
+      e.preventDefault();
+      const t = $('#quick-text').value.trim();
+      if (!t) { toast('請先輸入或貼上內容', true); return; }
+      parseQuickText(t);
+    }
+  });
+  document.addEventListener('paste', (e) => {
+    const r = route();
+    if (r.name !== 'add' || S.add.tab !== 'pre' || !$('#sheet').hidden) return;
+    const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+    const img = items.find((it) => it.kind === 'file' && /^image\//.test(it.type));
+    if (!img) return; // 純文字就照常貼進輸入框
+    e.preventDefault();
+    const file = img.getAsFile();
+    if (file) parseScreenshot(file);
+  });
   document.addEventListener('change', (e) => {
     if (e.target && e.target.id === 'pre-img' && e.target.files && e.target.files[0]) {
       parseScreenshot(e.target.files[0]);
