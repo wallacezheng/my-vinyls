@@ -397,7 +397,6 @@
         <a class="icon-btn soft" href="#/all" aria-label="搜尋收藏" style="color:var(--ink)">${I.search}</a>
       </header>
       <section id="crate" class="crate" aria-label="翻唱片箱"></section>
-      ${(S.mailInbox || []).length ? `<a class="pre-banner" href="#/add?tab=pre"><span class="pre-count mono">${S.mailInbox.length}</span><span class="body"><strong>筆 Gmail 訂單待確認</strong><span>點這裡確認要不要加入預訂清單</span></span>${I.next}</a>` : ''}
       ${pre.length ? `<a class="pre-banner" href="#/add?tab=pre">
         <span class="pre-count mono">${pre.length}</span>
         <span class="body"><strong>張預訂中</strong><span>最久的「${esc(pre[0].title)}」已經等了 ${daysSince(pre[0].orderDate || pre[0].createdAt) || 0} 天</span></span>
@@ -1158,7 +1157,6 @@
         <textarea id="quick-text" rows="3" placeholder="例如：昨天在佳佳預購五月天《乾杯》彩膠 1580 元，12 月到貨"></textarea>
         <button class="btn btn-ink btn-sm" type="submit" id="quick-go">交給 Gemini 整理</button>
       </form>
-      ${mailInboxHTML()}
       <div class="pre-list">
         ${pend.length ? pend.map((p) => {
           const days = daysSince(p.orderDate || p.createdAt);
@@ -1244,11 +1242,20 @@
     {
       const items = (r.items || []).filter((x) => x.title);
       if (!items.length) { toast(emptyMsg, true); return false; }
-      S.imgPick = { r: r, items: items.map((it) => ({
-        title: toTrad(it.title), artist: toTrad(it.artist || ''), source: r.store || '', price: it.price || '',
-        orderDate: r.order_date || new Date().toISOString().slice(0, 10), expectedDate: it.expected_date || '',
-        note: [r.order_no ? '訂單 ' + r.order_no : '', it.is_preorder ? '預購' : '', it.note || ''].filter(Boolean).join('；')
-      })) };
+      S.imgPick = { r: r, items: items.map((it) => {
+        const x = {
+          title: toTrad(it.title), artist: toTrad(it.artist || ''), source: it.store || r.store || '', price: it.price || '',
+          orderDate: r.order_date || new Date().toISOString().slice(0, 10), expectedDate: it.expected_date || '',
+          note: [(it.kind || r.kind) === '出貨' ? '已出貨' : '', it.vinyl_color ? '膠色：' + toTrad(it.vinyl_color) : '', toTrad(it.format_note || ''),
+            r.order_no ? '訂單 ' + r.order_no : '', it.is_preorder ? '預購' : '', toTrad(it.note || '')].filter(Boolean).join('；')
+        };
+        const k = normKey(x.title);
+        const owned = k && S.records.find((rec) => normKey(rec.title).indexOf(k) !== -1 || k.indexOf(normKey(rec.title)) !== -1 && normKey(rec.title).length > 1);
+        const pending = k && pendingPreorders().find((p) => normKey(p.title) === k);
+        x.flag = owned ? '已收藏：「' + owned.title + '」' : pending ? '已在預訂清單' : '';
+        x.checked = !x.flag;
+        return x;
+      }) };
       showImgPick();
       return true;
     }
@@ -1256,20 +1263,50 @@
   function showImgPick() {
     const P = S.imgPick;
     if (!P || !P.items.length) { S.imgPick = null; return; }
-    if (P.items.length === 1) { const it = P.items.shift(); openPreorderForm(it, null); return; }
-    openSheet(`<h2 id="sheet-title">截圖裡找到 ${P.items.length} 張黑膠</h2>
-      <p class="muted" style="margin:0 0 10px;font-size:13px">一張一張確認後加入預訂。</p>
-      ${P.items.map((it, i) => `<article class="mail-card" style="border:1.5px solid var(--line)">
-        <div class="pre-main"><strong>${esc(it.title)}</strong><span class="muted">${esc(it.artist)}</span>
-          <span class="pre-meta mono">${esc([it.source, it.price ? fmtNT(it.price) : ''].filter(Boolean).join(' · '))}</span></div>
-        <div class="pre-actions"><button class="btn btn-ink btn-sm" data-img="${i}">加入預訂</button></div>
-      </article>`).join('')}
-      <div class="form-actions" style="padding-top:10px"><button class="btn btn-outline" data-action="close-sheet">完成</button></div>`, (root) => {
-      $$('[data-img]', root).forEach((b) => b.addEventListener('click', () => {
-        const it = P.items.splice(Number(b.dataset.img), 1)[0];
+    if (P.items.length === 1 && !P.items[0].flag) { const it = P.items.shift(); openPreorderForm(it, null); return; }
+    const n = P.items.filter((x) => x.checked).length;
+    openSheet(`<h2 id="sheet-title">找到 ${P.items.length} 張黑膠</h2>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">勾選要加入預訂清單的唱片；想先修改內容就按「編輯」。已收藏或已在預訂清單的預設不勾。</p>
+      <div class="pick-list">${P.items.map((it, i) => `<div class="pick-row ${it.flag ? 'flagged' : ''}">
+        <label class="pick-check"><input type="checkbox" data-pick="${i}" ${it.checked ? 'checked' : ''}><span class="sr-only">加入 ${esc(it.title)}</span></label>
+        <div class="pre-main">
+          <strong>${esc(it.title)}</strong>
+          <span class="muted">${esc(it.artist)}</span>
+          <span class="pre-meta mono">${esc([it.source, it.price ? fmtNT(it.price) : '價格未標示'].filter(Boolean).join(' · '))}</span>
+          ${it.note ? `<span class="pre-meta">${esc(it.note)}</span>` : ''}
+          ${it.flag ? `<span class="pick-flag">${esc(it.flag)}</span>` : ''}
+        </div>
+        <button class="btn btn-outline btn-sm" data-pick-edit="${i}">編輯</button>
+      </div>`).join('')}</div>
+      <div class="form-actions" style="padding-top:12px"><button class="btn btn-outline" data-action="close-sheet">取消</button>
+        <button class="btn btn-ink" id="pick-add" ${n ? '' : 'disabled'}>加入勾選的 ${n} 張</button></div>`, (root) => {
+      $$('[data-pick]', root).forEach((cb) => cb.addEventListener('change', () => {
+        P.items[Number(cb.dataset.pick)].checked = cb.checked;
+        const c = P.items.filter((x) => x.checked).length;
+        const b = $('#pick-add', root); b.textContent = `加入勾選的 ${c} 張`; b.disabled = !c;
+      }));
+      $$('[data-pick-edit]', root).forEach((b) => b.addEventListener('click', () => {
+        const it = P.items.splice(Number(b.dataset.pickEdit), 1)[0];
         closeSheet();
         openPreorderForm(it, null);
       }));
+      $('#pick-add', root).addEventListener('click', async () => {
+        const chosen = P.items.filter((x) => x.checked);
+        const btn = $('#pick-add', root); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        let ok = 0;
+        try {
+          for (const it of chosen) {
+            const saved = await API.preorderAdd({ title: it.title, artist: it.artist, source: it.source, price: it.price, orderDate: it.orderDate, expectedDate: it.expectedDate, note: it.note });
+            S.preorders = (S.preorders || []).concat([saved]);
+            ok++;
+          }
+        } catch (e) { handleError(e); }
+        persist();
+        S.imgPick = null;
+        closeSheet();
+        toast(`已加入 ${ok} 張到預訂清單`);
+        render(true);
+      });
     });
   }
   // 快速輸入：送出文字；貼上圖片就直接辨識

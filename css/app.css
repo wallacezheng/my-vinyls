@@ -483,3 +483,9 @@ img { -webkit-user-drag: none; }
 .quick-box textarea { width: 100%; min-height: 84px; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bg); font-size: 16px; line-height: 1.6; resize: vertical; }
 .quick-box textarea:focus { outline: none; border-color: var(--ink); }
 .quick-box .btn { align-self: flex-end; }
+.pick-list { display: flex; flex-direction: column; gap: 8px; }
+.pick-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--surface); }
+.pick-row.flagged { background: #F7F5F0; }
+.pick-check { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin: -8px -6px 0 -8px; cursor: pointer; }
+.pick-check input { width: 22px; height: 22px; accent-color: var(--ink); }
+.pick-flag { align-self: flex-start; margin-top: 4px; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: #FFF1D6; color: #6B4A00; }
