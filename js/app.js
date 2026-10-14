@@ -1228,7 +1228,63 @@
       handleParsed(r, '這張圖裡沒有找到黑膠商品');
     } catch (e) { handleError(e); }
   }
+  // ───────── 本機解析：Gemini 摘要那種「來源／歌手／唱片名稱／價格」格式，不用呼叫 API ─────────
+  function normStore(n) {
+    n = String(n || '').split(/[｜|]/)[0].trim();
+    if (!n) return '';
+    if (/誠品|eslite/i.test(n)) return '誠品音樂';
+    if (/博客來/.test(n)) return '博客來';
+    if (/五大|five ?music/i.test(n)) return '五大唱片';
+    const hit = SOURCES.find((x) => n.indexOf(x.replace(/唱片|音樂/g, '')) !== -1);
+    return hit || n;
+  }
+  function cleanArtist(a) {
+    return String(a || '').replace(/[（(][^）)]*[）)]/g, '').replace(/\s{2,}/g, ' ').replace(/\s*\/\s*/g, ' / ').trim();
+  }
+  /** 「偏執面 (神經白膠唱片)」→ { title: 偏執面, color: 白膠, spec: 神經白膠唱片 } */
+  function cleanTitle(raw) {
+    let t = String(raw || '');
+    const spec = [];
+    let color = '';
+    t = t.replace(/[（(]([^）)]*)[）)]/g, (m, inner) => {
+      if (/膠|LP|限量|限定|180\s*g|視覺|ARS/i.test(inner)) { spec.push(inner.trim()); return ' '; }
+      return m;
+    });
+    const colorIn = (str) => {
+      const ms = String(str).match(/[紅橙黃綠藍紫粉白金銀灰透明彩液態圖霧]{1,4}膠/g) || [];
+      return ms.find((x) => x !== '黑膠') || '';
+    };
+    color = colorIn(t) || colorIn(spec.join(' '));
+    if (color && t.indexOf(color) !== -1) t = t.replace(color, ' ');
+    t = t.replace(/黑膠\s*\d?\s*LP|\b\d?\s*LP\b|\b180\s*g\b|\bARS\b|黑膠唱片|黑膠/gi, (m) => { spec.push(m.replace(/\s+/g, '')); return ' '; });
+    t = t.replace(/[《》]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    return { title: t, color: color, spec: Array.from(new Set(spec.filter((x) => x && x !== color))).join(' ') };
+  }
+  function parseSummaryLocal(text) {
+    const lines = String(text).split(/\n/).map((l) => l.replace(/^[\s*•\-–·]+/, '').trim()).filter(Boolean);
+    const items = [];
+    let store = '', artist = '', cur = null;
+    lines.forEach((line) => {
+      let m;
+      if ((m = line.match(/^(?:-{3,})?\s*\d+[.、]\s*(.+)$/)) && !/[:：]/.test(m[1])) { store = normStore(m[1]); return; }
+      if ((m = line.match(/^(?:來源|通路|商店|購買來源)\s*[:：]\s*(.+)$/))) { store = normStore(m[1]); return; }
+      if ((m = line.match(/^(?:歌手|藝人|演出者)\s*[:：]\s*(.+)$/))) { artist = cleanArtist(m[1]); return; }
+      if ((m = line.match(/^(?:唱片名稱|專輯名稱|專輯|品名|商品名稱)\s*[:：]\s*(.+)$/))) {
+        const c = cleanTitle(m[1]);
+        cur = { title: c.title, artist: artist, store: store, price: null, vinyl_color: c.color, format_note: c.spec };
+        items.push(cur); return;
+      }
+      if ((m = line.match(/^(?:價格|金額|售價|單價)\s*[:：]\s*(.+)$/)) && cur) {
+        const n = m[1].replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+        cur.price = n ? Number(n[0]) : null;
+      }
+    });
+    return items.length ? { kind: '訂單', store: '', order_date: '', order_no: '', items: items } : null;
+  }
+
   async function parseQuickText(text) {
+    const local = parseSummaryLocal(text);
+    if (local) { if (handleParsed(local, '') && $('#quick-text')) $('#quick-text').value = ''; return; }
     const btn = $('#quick-go');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>&nbsp;整理中，約 5–20 秒'; }
     try {
