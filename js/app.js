@@ -1154,8 +1154,9 @@
       </div>
       <form class="quick-box" id="quick-form">
         <label for="quick-text"><strong>快速輸入</strong><span class="muted">貼上 Gemini 摘要、訂單文字，或直接打一句話；也可以直接貼上截圖</span></label>
-        <textarea id="quick-text" rows="3" placeholder="例如：昨天在佳佳預購五月天《乾杯》彩膠 1580 元，12 月到貨"></textarea>
-        <button class="btn btn-ink btn-sm" type="submit" id="quick-go">交給 Gemini 整理</button>
+        <textarea id="quick-text" rows="3" placeholder="例如：五月天 - 乾杯 彩膠 NT$1,580（佳佳唱片購買），預計 2026年12月1日 到貨"></textarea>
+        <button class="btn btn-ink btn-sm" type="submit" id="quick-go">解析</button>
+        <p class="quick-msg" id="quick-msg" role="status" aria-live="polite"></p>
       </form>
       <div class="pre-list">
         ${pend.length ? pend.map((p) => {
@@ -1282,17 +1283,86 @@
     return items.length ? { kind: '訂單', store: '', order_date: '', order_no: '', items: items } : null;
   }
 
+  /** 一句話格式：「藝人 - 專輯 2LP 彩膠…由 X 發行，預計 2026年10月30日 上市，NT$ 1,480（THT唱片購買）」 */
+  function parseSentenceLocal(text) {
+    const chunks = String(text).split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    const items = [];
+    for (const c of chunks) {
+      const it = parseOneSentence(c);
+      if (!it) return null; // 有一段看不懂就整段交給 Gemini，避免漏掉
+      items.push(it);
+    }
+    return items.length ? { kind: '訂單', store: '', order_date: '', order_no: '', items: items } : null;
+  }
+  function parseOneSentence(s) {
+    let artist = '', head = '', extra = '';
+    const STOP = /[，,。；;]|由\s|預計|NT\$|NTD|新台幣|售價|價格|\d+\s*(?:元|塊)/;
+    let m = s.match(/^(.{1,60}?)\s*《([^》]+)》/);
+    if (m) { artist = m[1]; head = m[2]; extra = s.slice(m[0].length).split(STOP)[0]; }
+    else {
+      m = s.match(/^(.{1,60}?)\s+[-–—]\s+(.+)$/);
+      if (!m) return null;
+      artist = m[1];
+      head = m[2].split(STOP)[0];
+    }
+    SOURCES.concat(['誠品', '博客來', '五大', '佳佳', '老頭']).forEach((x) => { if (x !== '其他') head = head.split(x).join(' '); });
+    artist = cleanArtist(artist.replace(/^.*(?:預購|預訂|買了|購買|訂了)\s*/, ''));
+    // 規格從第一個 LP／黑膠／Vinyl 字樣開始切掉
+    let spec = '', color = '';
+    const cut = head.search(/\s\d?\s*LP\b|\d+\s*LP\b|[一-鿿]{0,8}黑膠|[一-鿿]{1,6}膠\b|[（(]?\s*(?:color|colour|\w+\s+)?vinyl/i);
+    if (cut > 0) { spec = head.slice(cut); head = head.slice(0, cut); }
+    if (extra) { const e = extra.replace(/(?:在|於)?\s*\S*(?:購買|預購|買)\S*/g, ' ').trim(); if (e) spec = (spec + ' ' + e).trim(); }
+    const c = cleanTitle(head);
+    const cm = spec.match(/([\u4e00-\u9fff]{1,8}?)(黑膠|膠)/);
+    if (cm && /[紅橙黃綠藍紫粉白金銀灰透明彩液態圖霧湖]/.test(cm[1])) color = cm[2] === '黑膠' ? cm[1] : cm[1] + '膠';
+    color = c.color || color;
+    spec = [c.spec, spec.replace(/[（）()]/g, ' ').replace(/\s{2,}/g, ' ').trim()].filter(Boolean).join(' ');
+    if (!c.title || !artist) return null;
+    const pm = s.replace(/,/g, '').match(/(?:NT\$|NTD|新台幣|\$|售價|價格)\s*[:：]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:元|塊)/i);
+    const price = pm ? Number(pm[1] || pm[2]) : null;
+    let store = '';
+    const sm = s.match(/[（(]\s*([^（）()]{1,20}?)\s*(?:購買|買的|預購|訂購)\s*[）)]|在\s*([^\s，,。]{1,12}?)\s*(?:購買|預購|買|訂)/);
+    if (sm) store = normStore(sm[1] || sm[2]);
+    if (!store) store = SOURCES.find((x) => x !== '其他' && s.indexOf(x) !== -1) || '';
+    if (!store) { const n = normStore(s.match(/誠品|博客來|五大/) ? s.match(/誠品|博客來|五大/)[0] : ''); store = n; }
+    let expected = '';
+    const dm = s.match(/(\d{4})\s*[年\/.-]\s*(\d{1,2})\s*[月\/.-]\s*(\d{1,2})\s*日?/);
+    if (dm && /預計|上市|發行|到貨|出貨|發售/.test(s)) expected = dm[1] + '-' + String(dm[2]).padStart(2, '0') + '-' + String(dm[3]).padStart(2, '0');
+    const lm = s.match(/由\s*([^，,。]+?)\s*發行/);
+    return { title: c.title, artist: artist, store: store, price: price, vinyl_color: color, format_note: spec,
+      expected_date: expected, note: lm ? '廠牌：' + lm[1] : '' };
+  }
+  function quickMsg(text, isErr) {
+    const el = $('#quick-msg');
+    if (!el) { if (text) toast(text, isErr); return; }
+    el.textContent = text || '';
+    el.classList.toggle('err', !!isErr);
+  }
+
   async function parseQuickText(text) {
-    const local = parseSummaryLocal(text);
-    if (local) { if (handleParsed(local, '') && $('#quick-text')) $('#quick-text').value = ''; return; }
+    const local = parseSummaryLocal(text) || parseSentenceLocal(text);
+    if (local) {
+      quickMsg('本機解析完成（沒有用到 Gemini）');
+      if (handleParsed(local, '') && $('#quick-text')) $('#quick-text').value = '';
+      return;
+    }
     const btn = $('#quick-go');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>&nbsp;整理中，約 5–20 秒'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>&nbsp;本機看不懂，交給 Gemini（約 5–20 秒）'; }
+    quickMsg('格式不固定，已交給 Gemini 整理…');
     try {
       await loadS2T();
       const r = await API.parseText(text);
-      if (handleParsed(r, '這段文字裡沒有找到黑膠唱片，試著寫清楚藝人和專輯名稱') && $('#quick-text')) $('#quick-text').value = '';
-    } catch (e) { handleError(e); }
-    finally { if ($('#quick-go')) { $('#quick-go').disabled = false; $('#quick-go').textContent = '交給 Gemini 整理'; } }
+      if (handleParsed(r, '這段文字裡沒有找到黑膠唱片，試著寫清楚藝人和專輯名稱') && $('#quick-text')) { $('#quick-text').value = ''; quickMsg('Gemini 整理完成'); }
+      else quickMsg('Gemini 沒找到黑膠唱片。可改成「藝人 - 專輯 價格 通路」這種寫法，本機就能直接解析。', true);
+    } catch (e) {
+      const msg = String(e && e.message || e);
+      if (e instanceof API.AuthError) { handleError(e); return; }
+      quickMsg(/未知的 action|parseText/i.test(msg) ? '後端還是舊版本：請把最新 Code.gs 貼回 Apps Script 並部署新版本。'
+        : /429|額度/.test(msg) ? 'Gemini 免費額度用完了，等一下再試；或改成「藝人 - 專輯 價格 通路」這種寫法，本機就能直接解析。'
+        : msg + '。可改成「藝人 - 專輯 價格 通路」這種寫法，本機就能直接解析。', true);
+      handleError(e);
+    }
+    finally { if ($('#quick-go')) { $('#quick-go').disabled = false; $('#quick-go').textContent = '解析'; } }
   }
   function handleParsed(r, emptyMsg) {
     {

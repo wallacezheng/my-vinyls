@@ -483,6 +483,9 @@ img { -webkit-user-drag: none; }
 .quick-box textarea { width: 100%; min-height: 84px; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--bg); font-size: 16px; line-height: 1.6; resize: vertical; }
 .quick-box textarea:focus { outline: none; border-color: var(--ink); }
 .quick-box .btn { align-self: flex-end; }
+.quick-msg { margin: 0; font-size: 13px; color: var(--muted, #777); min-height: 0; }
+.quick-msg:empty { display: none; }
+.quick-msg.err { color: #B3202A; }
 .pick-list { display: flex; flex-direction: column; gap: 8px; }
 .pick-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--surface); }
 .pick-row.flagged { background: #F7F5F0; }
