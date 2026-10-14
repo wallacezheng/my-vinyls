@@ -69,6 +69,7 @@
     preorderAdd: (p) => call('preorderAdd', { preorder: p }),
     preorderUpdate: (id, updates) => call('preorderUpdate', { id: id, updates: updates }),
     preorderRemove: (id) => call('preorderRemove', { id: id }),
-    rename: (field, from, to) => call('rename', { field: field, from: from, to: to })
+    rename: (field, from, to) => call('rename', { field: field, from: from, to: to }),
+    bulkUpdate: (items) => call('bulkUpdate', { items: items })
   };
 })();

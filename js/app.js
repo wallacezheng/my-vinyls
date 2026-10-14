@@ -824,6 +824,7 @@
             <div class="row sep"><span>帳面盈虧（匯率 ${S.rate.toFixed(2)}）</span>${pl}</div>
           </div>
         </div>
+        ${webLinksHTML(r)}
       </section>
 
       <section class="d-sec">
@@ -862,6 +863,19 @@
      </div>
     </article>`;
     extractColor(r);
+  }
+
+  /** 上網找資料：不花錢，直接開搜尋頁 */
+  function webLinksHTML(r) {
+    const q = encodeURIComponent([r.artist, r.title, '黑膠'].filter(Boolean).join(' '));
+    const links = [
+      ['Google', 'https://www.google.com/search?q=' + q],
+      ['Google 價格', 'https://www.google.com/search?q=' + q + encodeURIComponent(' 價格')],
+      ['蝦皮', 'https://shopee.tw/search?keyword=' + q],
+      ['YouTube', 'https://www.youtube.com/results?search_query=' + encodeURIComponent([r.artist, r.title, 'vinyl'].join(' '))]
+    ];
+    if (r.releaseId) links.push(['Discogs 市集', 'https://www.discogs.com/sell/release/' + encodeURIComponent(r.releaseId)]);
+    return `<div class="web-links"><span>上網找資料</span>${links.map((l) => `<a href="${esc(l[1])}" target="_blank" rel="noopener">${esc(l[0])}${I.ext}</a>`).join('')}</div>`;
   }
 
   async function updateField(id, updates, msg) {
@@ -1100,6 +1114,7 @@
   // ───────────────────────── 新增 ─────────────────────────
   function renderAdd(view) {
     const A = S.add;
+    loadS2T(); // 先在背景載入簡繁對照，選唱片時就能直接轉繁體
     const tabParam = route().params && route().params.get('tab');
     if (tabParam) A.tab = tabParam === 'pre' ? 'pre' : 'new';
     if (A.form) { renderAddForm(view); return; }
@@ -1224,8 +1239,8 @@
         ${coverHTML({ id: x.id, title: x.title, coverUrl: x.thumb })}
         <span class="body">
           ${x.owned ? '<span class="badge">已收藏</span>' : ''}
-          <span class="t">${esc(x.title)}</span>
-          <span class="m">${esc([x.year, x.country, x.label, x.catno].filter(Boolean).join(' · '))}</span>
+          <span class="t">${esc(toTrad(x.title))}</span>
+          <span class="m">${esc([x.year, x.country, toTrad(x.label), x.catno].filter(Boolean).join(' · '))}</span>
           <span class="m">${esc(x.format)}</span>
         </span>
       </button>`).join('')}
@@ -1237,7 +1252,7 @@
     if (!q) { toast('請輸入藝人、專輯或條碼', true); return; }
     S.add.query = q; S.add.busy = true; S.add.results = null;
     $('#add-results').innerHTML = resultsHTML();
-    try { S.add.results = await API.search(q); } catch (e) { S.add.results = null; handleError(e); }
+    try { S.add.results = (await Promise.all([API.search(q), loadS2T()]))[0]; } catch (e) { S.add.results = null; handleError(e); }
     S.add.busy = false;
     if (route().name === 'add' && !S.add.form) $('#add-results').innerHTML = resultsHTML();
   }
@@ -1246,7 +1261,7 @@
     const x = S.add.results[i];
     $('#add-results').innerHTML = '<div class="loading"><span class="spinner"></span>&nbsp; 抓取曲目與發行資訊…</div>';
     try {
-      const d = await API.release(x.id);
+      const d = tradRecord((await Promise.all([API.release(x.id), loadS2T()]))[0]);
       const isBarcode = /^\d{8,14}$/.test(S.add.query.replace(/\s/g, ''));
       S.add.form = Object.assign({
         id: 'new', tags: [], rating: 0, favorite: false, review: '', status: S.settings.status[0] || '',
@@ -1379,6 +1394,26 @@
       document.head.appendChild(sc);
     });
   }
+  /** 簡轉繁（OpenCC 已載入才轉；網址、條碼、編號等欄位不轉） */
+  const TRAD_FIELDS = ['title', 'artist', 'label', 'tracklist', 'discogsNotes', 'vinylColor', 'format', 'released'];
+  // 這些字在繁體中也常用（例如姓氏「范」、皇后的「后」），單獨出現時不當作簡體的證據
+  const AMBIG = '范后里干台只面系周发松云谷斗丑卷冲制准姜杰余于朴征仆困才咸凶';
+  const PROTECT = '范'; // 姓氏：一律不轉（避免「范曉萱」變成「範曉萱」）
+  function toTrad(v) {
+    if (!s2t || typeof v !== 'string' || !v) return v;
+    const conv = s2t(v);
+    if (conv === v) return v;
+    const a = Array.from(v), b = Array.from(conv);
+    if (a.length !== b.length) return conv;
+    const evidence = a.some((ch, i) => ch !== b[i] && AMBIG.indexOf(ch) === -1);
+    if (!evidence) return v; // 只有模稜兩可的字：視為本來就是繁體
+    return b.map((ch, i) => (PROTECT.indexOf(a[i]) !== -1 ? a[i] : ch)).join('');
+  }
+  function tradRecord(d) {
+    const out = Object.assign({}, d);
+    TRAD_FIELDS.forEach((f) => { if (typeof out[f] === 'string') out[f] = toTrad(out[f]); });
+    return out;
+  }
   function applyAliases(d) {
     const out = Object.assign({}, d);
     Object.keys(TIDY_FIELDS).forEach((f) => { const m = (S.aliases || {})[f] || {}; if (out[f] && m[out[f]]) out[f] = m[out[f]]; });
@@ -1435,6 +1470,7 @@
     view.innerHTML = `
       <header class="page-head"><div><span class="eyebrow">統一寫法，統計和搜尋才準</span><h1>整理寫法</h1></div>
         <a class="icon-btn soft" href="#/stats" aria-label="回到統計" style="color:var(--ink)">${I.back}</a></header>
+      ${tradCardHTML()}
       <div class="seg seg4" role="tablist">${Object.keys(TIDY_FIELDS).map((f) => `<a role="tab" href="#/tidy?f=${f}" class="${f === field ? 'on' : ''}" aria-selected="${f === field}">${TIDY_FIELDS[f]}</a>`).join('')}</div>
 
       <div class="section-head"><h2>可能是同一個</h2></div>
@@ -1472,6 +1508,40 @@
       if (cb.checked) S.tidySel.set.add(cb.dataset.tidyVal); else S.tidySel.set.delete(cb.dataset.tidyVal);
       drawAll();
     });
+  }
+
+  /** 找出還有簡體字的唱片 */
+  function tradCandidates() {
+    return S.records.map((r) => {
+      const updates = {};
+      TRAD_FIELDS.forEach((f) => { const v = r[f]; if (typeof v === 'string' && v && toTrad(v) !== v) updates[f] = toTrad(v); });
+      return Object.keys(updates).length ? { id: r.id, r: r, updates: updates } : null;
+    }).filter(Boolean);
+  }
+  function tradCardHTML() {
+    const c = tradCandidates();
+    if (!c.length) return '<p class="trad-ok pad">✓ 所有唱片資料都已經是繁體中文。</p>'.replace('✓ ', '');
+    const ex = c.slice(0, 3).map((x) => { const f = Object.keys(x.updates)[0]; return `<li><span class="muted">${esc(String(x.r[f]).slice(0, 24))}</span> → <b>${esc(String(x.updates[f]).slice(0, 24))}</b></li>`; }).join('');
+    return `<section class="trad-card">
+      <strong>發現 ${c.length} 張唱片含簡體字</strong>
+      <span class="muted" style="font-size:13px">專輯名稱、藝人、唱片公司、曲目、筆記等文字欄位</span>
+      <ul>${ex}</ul>
+      <button class="btn btn-ink btn-sm" data-action="trad-all">全部轉成繁體</button>
+    </section>`;
+  }
+  async function convertAllTrad(btn) {
+    const c = tradCandidates();
+    if (!c.length) return;
+    if (!(await confirmSheet('全部轉成繁體？', `會把 ${c.length} 張唱片的文字欄位從簡體轉成繁體（網址、條碼、編號不會動）。`, '轉換'))) return;
+    toast('轉換中…');
+    try {
+      for (let i = 0; i < c.length; i += 30) {
+        const res = await API.bulkUpdate(c.slice(i, i + 30).map((x) => ({ id: x.id, updates: x.updates })));
+        (res.records || []).forEach(upsert);
+      }
+      toast(`已轉換 ${c.length} 張`);
+      render(true);
+    } catch (e) { handleError(e); }
   }
 
   async function doRename(field, from, to) {
@@ -1751,6 +1821,7 @@
         saveJSON('vinyl.tidy.ignore', ig); toast('好，之後不再提示這組'); render(true);
         break;
       }
+      case 'trad-all': convertAllTrad(el); break;
       case 'tidy-merge-sel': openMergeSheet(S.tidySel.field, Array.from(S.tidySel.set)); break;
       case 'pre-edit': openPreorderForm((S.preorders || []).find((x) => x.id === el.dataset.id)); break;
       case 'pre-arrive': { const p = (S.preorders || []).find((x) => x.id === el.dataset.id); if (p) startArrival(p); break; }

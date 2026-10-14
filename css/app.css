@@ -458,3 +458,12 @@ img { -webkit-user-drag: none; }
 @keyframes liquid { to { transform: rotate(-360deg); } }
 @media (prefers-reduced-motion: reduce) { .disc.liquid::before { animation: none; } }
 .src-field input { margin-top: 6px; }
+
+/* 上網找資料、簡轉繁 */
+.web-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; font-size: 13px; }
+.web-links > span { width: 100%; font-weight: 700; }
+.web-links a { display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 12px; border-radius: 18px; border: 1.5px solid currentColor; color: inherit; text-decoration: none; font-weight: 700; }
+.web-links a svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+.trad-card { margin: 14px 16px 0; padding: 14px; border-radius: 14px; background: #FBEDEF; color: #4A1019; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.trad-card ul { margin: 2px 0 6px; padding-left: 18px; font-size: 14px; }
+.trad-ok { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
