@@ -70,6 +70,9 @@
     preorderUpdate: (id, updates) => call('preorderUpdate', { id: id, updates: updates }),
     preorderRemove: (id) => call('preorderRemove', { id: id }),
     rename: (field, from, to) => call('rename', { field: field, from: from, to: to }),
-    bulkUpdate: (items) => call('bulkUpdate', { items: items })
+    bulkUpdate: (items) => call('bulkUpdate', { items: items }),
+    mailScan: (days) => call('mailScan', { days: days }),
+    mailUpdate: (id, updates) => call('mailUpdate', { id: id, updates: updates }),
+    parseImage: (image, mime) => call('parseImage', { image: image, mime: mime })
   };
 })();

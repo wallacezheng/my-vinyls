@@ -72,6 +72,7 @@
     pin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg>',
     disc: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>',
     plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+    image: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-9 8"/></svg>',
     refresh: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>'
   };
 
@@ -178,10 +179,11 @@
     S.priceInfo = d.priceCursor || null;
     S.preorders = d.preorders || [];
     S.aliases = d.aliases || {};
+    S.mailInbox = d.mailInbox || [];
     if (S.crate.order.length !== S.records.length) buildCrateOrder();
   }
   function persist() {
-    API.saveCache({ records: S.records, settings: S.settings, exchangeRate: S.rate, history: S.history, priceCursor: S.priceInfo, preorders: S.preorders, aliases: S.aliases });
+    API.saveCache({ records: S.records, settings: S.settings, exchangeRate: S.rate, history: S.history, priceCursor: S.priceInfo, preorders: S.preorders, aliases: S.aliases, mailInbox: S.mailInbox });
   }
   function upsert(rec) {
     const i = S.records.findIndex((r) => r.id === rec.id);
@@ -395,6 +397,7 @@
         <a class="icon-btn soft" href="#/all" aria-label="搜尋收藏" style="color:var(--ink)">${I.search}</a>
       </header>
       <section id="crate" class="crate" aria-label="翻唱片箱"></section>
+      ${(S.mailInbox || []).length ? `<a class="pre-banner" href="#/add?tab=pre"><span class="pre-count mono">${S.mailInbox.length}</span><span class="body"><strong>筆 Gmail 訂單待確認</strong><span>點這裡確認要不要加入預訂清單</span></span>${I.next}</a>` : ''}
       ${pre.length ? `<a class="pre-banner" href="#/add?tab=pre">
         <span class="pre-count mono">${pre.length}</span>
         <span class="body"><strong>張預訂中</strong><span>最久的「${esc(pre[0].title)}」已經等了 ${daysSince(pre[0].orderDate || pre[0].createdAt) || 0} 天</span></span>
@@ -1146,7 +1149,11 @@
     view.innerHTML = `
       <header class="page-head"><div><span class="eyebrow">${pend.length} 張等待中${total ? '・共 ' + fmtNT(total) : ''}</span><h1>新增唱片</h1></div></header>
       ${tabs}
-      <div class="pad" style="padding-top:14px"><button class="btn btn-ink btn-block" data-action="pre-new">${I.plus}記一筆預訂</button></div>
+      <div class="pad pre-btns" style="padding-top:14px">
+        <button class="btn btn-ink" data-action="pre-new">${I.plus}記一筆預訂</button>
+        <label class="btn btn-outline">${I.image}上傳購買截圖<input type="file" accept="image/*" id="pre-img" hidden></label>
+      </div>
+      ${mailInboxHTML()}
       <div class="pre-list">
         ${pend.length ? pend.map((p) => {
           const days = daysSince(p.orderDate || p.createdAt);
@@ -1168,8 +1175,118 @@
       ${done.length ? `<div class="section-head"><h2>最近到貨</h2></div><ul class="pre-done">${done.map((p) => `<li>${p.recordId && S.byId.get(p.recordId) ? `<a href="#/r/${encodeURIComponent(p.recordId)}">${esc(p.title)}</a>` : esc(p.title)}<span class="muted">${esc(p.artist || '')}</span></li>`).join('')}</ul>` : ''}`;
   }
 
-  function openPreorderForm(p) {
-    const isNew = !p;
+  // ───────── Gmail 找到的訂單（待確認） ─────────
+  function mailInboxHTML() {
+    const list = (S.mailInbox || []).filter((m) => m.status === '待確認');
+    return `<section class="mail-box">
+      <div class="mail-head">
+        <strong>${list.length ? `從 Gmail 找到 ${list.length} 筆，請確認` : 'Gmail 訂單信'}</strong>
+        <button class="btn btn-outline btn-sm" data-action="mail-scan">${I.refresh}立即檢查</button>
+      </div>
+      ${list.length ? '' : '<p class="muted" style="margin:6px 0 0;font-size:13px">每週一早上會自動檢查。第一次可以按「立即檢查」回頭找最近 60 天的訂單。</p>'}
+      ${list.map((m) => `<article class="mail-card">
+        <div class="pre-main">
+          <span class="mail-tag ${m.kind === '出貨' ? 'ship' : ''}">${esc(m.kind || '訂單')}</span>
+          <strong>${esc(m.title)}</strong>
+          <span class="muted">${esc(m.artist || '')}</span>
+          <span class="pre-meta mono">${esc([m.source, m.price ? fmtNT(m.price) : '', m.orderDate].filter(Boolean).join(' · '))}</span>
+          ${m.note ? `<span class="pre-meta">${esc(m.note)}</span>` : ''}
+          ${safeUrl(m.link) ? `<a class="pre-meta" href="${esc(m.link)}" target="_blank" rel="noopener">查看原始信件</a>` : ''}
+        </div>
+        <div class="pre-actions">
+          <button class="btn btn-ink btn-sm" data-action="mail-adopt" data-id="${esc(m.id)}">加入預訂</button>
+          <button class="btn btn-outline btn-sm" data-action="mail-ignore" data-id="${esc(m.id)}">忽略</button>
+        </div>
+      </article>`).join('')}
+    </section>`;
+  }
+  // ───────── 購買截圖 → Gemini 辨識 ─────────
+  function shrinkImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const max = 1600, k = Math.min(1, max / Math.max(img.width, img.height));
+        const cv = document.createElement('canvas');
+        cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        URL.revokeObjectURL(url);
+        resolve(cv.toDataURL('image/jpeg', 0.85).split(',')[1]);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('讀不到這張圖片')); };
+      img.src = url;
+    });
+  }
+  async function parseScreenshot(file) {
+    toast('Gemini 辨識中…');
+    try {
+      const b64 = await shrinkImage(file);
+      const r = await API.parseImage(b64, 'image/jpeg');
+      const items = (r.items || []).filter((x) => x.title);
+      if (!items.length) { toast('這張圖裡沒有找到黑膠商品', true); return; }
+      S.imgPick = { r: r, items: items.map((it) => ({
+        title: toTrad(it.title), artist: toTrad(it.artist || ''), source: r.store || '', price: it.price || '',
+        orderDate: r.order_date || new Date().toISOString().slice(0, 10), expectedDate: it.expected_date || '',
+        note: [r.order_no ? '訂單 ' + r.order_no : '', it.is_preorder ? '預購' : '', it.note || ''].filter(Boolean).join('；')
+      })) };
+      showImgPick();
+    } catch (e) { handleError(e); }
+  }
+  function showImgPick() {
+    const P = S.imgPick;
+    if (!P || !P.items.length) { S.imgPick = null; return; }
+    if (P.items.length === 1) { const it = P.items.shift(); openPreorderForm(it, null); return; }
+    openSheet(`<h2 id="sheet-title">截圖裡找到 ${P.items.length} 張黑膠</h2>
+      <p class="muted" style="margin:0 0 10px;font-size:13px">一張一張確認後加入預訂。</p>
+      ${P.items.map((it, i) => `<article class="mail-card" style="border:1.5px solid var(--line)">
+        <div class="pre-main"><strong>${esc(it.title)}</strong><span class="muted">${esc(it.artist)}</span>
+          <span class="pre-meta mono">${esc([it.source, it.price ? fmtNT(it.price) : ''].filter(Boolean).join(' · '))}</span></div>
+        <div class="pre-actions"><button class="btn btn-ink btn-sm" data-img="${i}">加入預訂</button></div>
+      </article>`).join('')}
+      <div class="form-actions" style="padding-top:10px"><button class="btn btn-outline" data-action="close-sheet">完成</button></div>`, (root) => {
+      $$('[data-img]', root).forEach((b) => b.addEventListener('click', () => {
+        const it = P.items.splice(Number(b.dataset.img), 1)[0];
+        closeSheet();
+        openPreorderForm(it, null);
+      }));
+    });
+  }
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.id === 'pre-img' && e.target.files && e.target.files[0]) {
+      parseScreenshot(e.target.files[0]);
+      e.target.value = '';
+    }
+  });
+
+  async function mailScan() {
+    const days = await new Promise((resolve) => {
+      openSheet(`<h2 id="sheet-title">檢查 Gmail 訂單信</h2>
+        <p class="muted" style="margin:0 0 12px">會讀取 7 家唱片行寄來、還沒處理過的信，交給 Gemini 找出黑膠商品（地址電話等個資會先遮掉）。每封約 5 秒。</p>
+        <div class="form-actions" style="flex-direction:column">
+          <button class="btn btn-ink" data-d="9">最近 9 天</button>
+          <button class="btn btn-outline" data-d="60">最近 60 天（第一次建議）</button>
+          <button class="btn btn-outline" data-d="0">取消</button>
+        </div>`, (root) => {
+        $$('[data-d]', root).forEach((b) => b.addEventListener('click', () => { closeSheet(); resolve(Number(b.dataset.d)); }));
+      });
+    });
+    if (!days) return;
+    toast('檢查 Gmail 中，可能要一兩分鐘…');
+    try {
+      let total = 0;
+      for (let i = 0; i < 6; i++) {
+        const r = await API.mailScan(days);
+        total += r.found;
+        if (!r.remaining) break;
+      }
+      await refresh(true);
+      toast(total ? `找到 ${total} 筆黑膠訂單，請確認` : '沒有找到新的黑膠訂單');
+      render(true);
+    } catch (e) { handleError(e); }
+  }
+
+  function openPreorderForm(p, fromMail) {
+    const isNew = !p || !p.id;
     p = p || { orderDate: new Date().toISOString().slice(0, 10) };
     openSheet(`<h2 id="sheet-title">${isNew ? '記一筆預訂' : '編輯預訂'}</h2>
       <form id="pre-form" style="display:flex;flex-direction:column;gap:12px">
@@ -1196,14 +1313,19 @@
           closeSheet();
           const ok = await confirmSheet('你已經收藏過這張', `唱片櫃裡已經有「${dup.title}」（${dup.artist}）。確定還要記這筆預訂嗎？`, '還是要記');
           if (!ok) return;
-          openPreorderForm(Object.assign({}, data));
+          openPreorderForm(Object.assign({}, data), fromMail);
           return;
         }
         const btn = $('#pre-save', form); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
         try {
           const saved = isNew ? await API.preorderAdd(data) : await API.preorderUpdate(p.id, data);
           S.preorders = (S.preorders || []).filter((x) => x.id !== saved.id).concat([saved]);
+          if (fromMail) {
+            await API.mailUpdate(fromMail.id, { status: '已加入', preorderId: saved.id });
+            S.mailInbox = (S.mailInbox || []).filter((m) => m.id !== fromMail.id);
+          }
           persist(); closeSheet(); toast(isNew ? '已記下預訂' : '已儲存'); render(true);
+          if (S.imgPick && S.imgPick.items.length) setTimeout(showImgPick, 400);
         } catch (err) { btn.disabled = false; btn.textContent = '儲存'; handleError(err); }
       });
       const del = $('#pre-del', root);
@@ -1808,6 +1930,18 @@
       case 'add-back': S.add.form = null; render(); break;
       case 'update-prices': updateAllPrices(); break;
       case 'pre-new': openPreorderForm(null); break;
+      case 'mail-scan': mailScan(); break;
+      case 'mail-adopt': {
+        const m = (S.mailInbox || []).find((x) => x.id === el.dataset.id);
+        if (m) openPreorderForm({ title: m.title, artist: m.artist, source: m.source, price: m.price || '', orderDate: m.orderDate, expectedDate: m.expectedDate, note: [m.orderNo ? '訂單 ' + m.orderNo : '', m.note].filter(Boolean).join('；') }, m);
+        break;
+      }
+      case 'mail-ignore':
+        try {
+          await API.mailUpdate(el.dataset.id, { status: '已忽略' });
+          S.mailInbox = (S.mailInbox || []).filter((x) => x.id !== el.dataset.id); persist(); render(true);
+        } catch (err) { handleError(err); }
+        break;
       case 'tidy-merge-group': {
         const field = (route().params && route().params.get('f')) || 'artist';
         const vals = el.dataset.values.split('\u0001');

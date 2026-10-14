@@ -467,3 +467,13 @@ img { -webkit-user-drag: none; }
 .trad-card { margin: 14px 16px 0; padding: 14px; border-radius: 14px; background: #FBEDEF; color: #4A1019; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .trad-card ul { margin: 2px 0 6px; padding-left: 18px; font-size: 14px; }
 .trad-ok { margin: 12px 0 0; font-size: 13px; color: var(--muted); }
+
+/* Gmail 待確認 */
+.mail-box { margin: 14px 16px 0; padding: 14px; border-radius: 16px; background: #EEF2F7; display: flex; flex-direction: column; gap: 10px; }
+.mail-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.mail-card { padding: 12px; border-radius: 12px; background: var(--surface); display: flex; gap: 10px; align-items: flex-start; }
+.mail-tag { align-self: flex-start; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: var(--ink); color: var(--bg); }
+.mail-tag.ship { background: #2456A6; color: #fff; }
+.mail-card a.pre-meta { color: var(--accent); }
+.pre-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pre-btns .btn { padding: 0 12px; font-size: 14px; }
