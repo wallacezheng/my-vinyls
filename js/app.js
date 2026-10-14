@@ -940,6 +940,34 @@
     const uniq = Array.from(new Set(values.map((x) => String(x || '').trim()).filter(Boolean)));
     return `<datalist id="${id}">${uniq.map((v) => `<option value="${esc(v)}"></option>`).join('')}</datalist>`;
   }
+  /** 購入通路：固定的下拉選項，選「其他」時可以自己輸入 */
+  const SOURCES = ['誠品音樂', '老頭音樂', '山海山唱片', '燭光唱片', 'THT唱片', '爛調唱片', 'CM Music', '佳佳唱片', '博客來', '五大唱片'];
+  function sourceSelectHTML(name, label, value) {
+    const v = String(value || '').trim();
+    const isOther = v && SOURCES.indexOf(v) === -1;
+    return `<div class="field src-field"><span>${esc(label)}</span>
+      <select name="${name}" aria-label="${esc(label)}">
+        <option value="">—</option>
+        ${SOURCES.map((o) => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+        <option value="__other" ${isOther ? 'selected' : ''}>其他</option>
+      </select>
+      <input name="${name}__other" placeholder="輸入其他通路（可留空）" value="${esc(isOther && v !== '其他' ? v : '')}" ${isOther ? '' : 'hidden'} aria-label="其他通路">
+    </div>`;
+  }
+  function readSource(root, name) {
+    const sel = $(`select[name="${name}"]`, root);
+    if (!sel) return '';
+    if (sel.value !== '__other') return sel.value;
+    return ($(`[name="${name}__other"]`, root).value.trim()) || '其他';
+  }
+  document.addEventListener('change', (e) => {
+    const sel = e.target.closest && e.target.closest('.src-field select');
+    if (!sel) return;
+    const other = $(`[name="${sel.name}__other"]`, sel.parentNode);
+    other.hidden = sel.value !== '__other';
+    if (!other.hidden) other.focus();
+  });
+
   function gradeSelectHTML(name, label, value) {
     return `<label class="field"><span>${esc(label)}</span><select name="${name}"><option value="">—</option>
       ${GRADES.map((g) => `<option value="${g[0]}" ${g[0] === value ? 'selected' : ''}>${g[0]}・${esc(g[1])}</option>`).join('')}</select></label>`;
@@ -984,7 +1012,7 @@
       <div class="form-box"><h3>我的這張</h3>
         <div class="form-grid">
           ${inputHTML('purchaseDate', '購入日期', r.purchaseDate, { extra: 'type="date"' })}
-          ${inputHTML('purchaseSource', '購入通路', r.purchaseSource, { extra: 'list="dl-source" placeholder="例如：誠品、佳佳"' })}
+          ${sourceSelectHTML('purchaseSource', '購入通路', r.purchaseSource)}
           ${inputHTML('location', '存放位置', r.location, { extra: 'list="dl-location" placeholder="例如：客廳櫃 A-3"' })}
           ${inputHTML('myNumber', '我的編號', r.myNumber, { extra: 'placeholder="例如：0347 / 1000"' })}
           ${gradeSelectHTML('mediaGrade', '唱片品相', r.mediaGrade)}
@@ -995,7 +1023,6 @@
           <div class="tag-picker" style="margin-top:4px">${['黑', '透明', '白', '紅', '藍', '湖水綠', '綠', '黃', '粉', '紫', '橘', '金', '大理石', '液態膠', '圖片膠'].map((c) => `<button type="button" class="chip" data-color="${c}">${c}</button>`).join('')}</div>
         </div>
         <input type="hidden" name="masterId" value="${esc(r.masterId)}">
-        ${datalistHTML('dl-source', distinct('purchaseSource').concat((S.preorders || []).map((p) => p.source)).concat(['誠品音樂', '佳佳唱片', '蝦皮', 'Discogs', '博客來', '演唱會現場']))}
         ${datalistHTML('dl-location', distinct('location'))}
       </div>
       <div class="form-box"><h3>發行資訊</h3>
@@ -1020,7 +1047,7 @@
       rating: v('rating'), favorite: v('favorite') === '1', review: v('review'), appleMusicUrl: v('appleMusicUrl'),
       label: v('label'), catno: v('catno'), barcode: v('barcode'), format: v('format'), released: v('released'),
       tracklist: v('tracklist'), discogsNotes: v('discogsNotes'), discogsUrl: v('discogsUrl'), coverUrl: v('coverUrl'),
-      purchaseDate: v('purchaseDate'), purchaseSource: v('purchaseSource'), location: v('location'), myNumber: v('myNumber'),
+      purchaseDate: v('purchaseDate'), purchaseSource: readSource(root, 'purchaseSource'), location: v('location'), myNumber: v('myNumber'),
       mediaGrade: v('mediaGrade'), sleeveGrade: v('sleeveGrade'), vinylColor: v('vinylColor'), masterId: v('masterId')
     };
   }
@@ -1134,13 +1161,12 @@
         ${inputHTML('title', '專輯名稱', p.title, { extra: 'required' })}
         ${inputHTML('artist', '藝人', p.artist)}
         <div class="form-grid">
-          ${inputHTML('source', '購買來源', p.source, { extra: 'list="dl-pre-source" placeholder="例如：誠品、佳佳"' })}
+          ${sourceSelectHTML('source', '購買來源', p.source)}
           ${inputHTML('price', '價格（NT$）', p.price || '', { extra: 'inputmode="decimal"' })}
           ${inputHTML('orderDate', '預訂日期', p.orderDate, { extra: 'type="date"' })}
           ${inputHTML('expectedDate', '預計到貨', p.expectedDate, { extra: 'placeholder="例如：2026 年 12 月"' })}
         </div>
         ${textareaHTML('note', '備註（訂單編號、版本、贈品…）', p.note, 3)}
-        ${datalistHTML('dl-pre-source', distinct('purchaseSource').concat((S.preorders || []).map((x) => x.source)).concat(['誠品音樂', '佳佳唱片', '蝦皮', '博客來', '五大唱片', '官方網站']))}
         <div class="form-actions"><button type="button" class="btn btn-outline" data-action="close-sheet">取消</button><button type="submit" class="btn btn-ink" id="pre-save">儲存</button></div>
         ${isNew ? '' : '<button type="button" class="btn btn-danger btn-block" id="pre-del">刪除這筆預訂</button>'}
       </form>`, (root) => {
@@ -1148,7 +1174,7 @@
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const v = (n) => $(`[name="${n}"]`, form).value.trim();
-        const data = { title: v('title'), artist: v('artist'), source: v('source'), price: v('price'), orderDate: v('orderDate'), expectedDate: v('expectedDate'), note: v('note') };
+        const data = { title: v('title'), artist: v('artist'), source: readSource(form, 'source'), price: v('price'), orderDate: v('orderDate'), expectedDate: v('expectedDate'), note: v('note') };
         if (!data.title) { toast('專輯名稱不可空白', true); return; }
         const dup = S.records.find((r) => normKey(r.title) === normKey(data.title) && (!data.artist || normKey(r.artist) === normKey(data.artist)));
         if (isNew && dup) {

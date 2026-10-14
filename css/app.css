@@ -457,3 +457,4 @@ img { -webkit-user-drag: none; }
 .disc.liquid .disc-label { position: relative; z-index: 1; }
 @keyframes liquid { to { transform: rotate(-360deg); } }
 @media (prefers-reduced-motion: reduce) { .disc.liquid::before { animation: none; } }
+.src-field input { margin-top: 6px; }
