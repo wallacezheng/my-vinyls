@@ -1230,7 +1230,7 @@
   }
   async function parseQuickText(text) {
     const btn = $('#quick-go');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>&nbsp;整理中，約 5–20 秒'; }
     try {
       await loadS2T();
       const r = await API.parseText(text);
